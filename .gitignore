@@ -1,4 +1,6 @@
 # Local account, group and model settings
+/config.yaml
+!/config.yaml.example
 /bot_config.json
 /members_config.json
 /llm_config.json
@@ -25,6 +27,7 @@ venv/
 
 # Build output; only the two required bridges are distributed
 native/.build/
+rust_bridge/target/
 *.obj
 *.lib
 *.exp
@@ -36,7 +39,12 @@ native/.build/
 *.zip
 *.7z
 *.rar
+*.deb
+linux_extracted/
+sysroot_debian12/
 dist/
+dist_linux/
+dist_linux.tar.gz
 
 # Editor and desktop metadata
 .idea/

@@ -1,4 +1,4 @@
-"""微信 4.1.15.13 原生文本服务；测试范围仅为文件传输助手。"""
+"""微信 4.1.15.55 原生文本服务；测试范围仅为文件传输助手。"""
 from __future__ import annotations
 
 import ctypes as c

@@ -1,13 +1,13 @@
-"""微信 4.1.15.13 联系人缓存的只读名字快照；调用方必须先核对核心 DLL 指纹。"""
+"""微信 4.1.15.55 联系人缓存的只读名字快照；调用方必须先核对核心 DLL 指纹。"""
 from __future__ import annotations
 
 import struct
 
 from .account import APP_GLOBAL_RVA, _pointer, read_current_account, validate_account
 
-CACHE_PROVIDER_GETTER_RVA = 0x36C7B0
-CACHE_PROVIDER_VTABLE_RVA = 0x8F9BF98
-CONTACT_CACHE_VTABLE_RVA = 0x8FA2538
+CACHE_PROVIDER_GETTER_RVA = 0x382440
+CACHE_PROVIDER_VTABLE_RVA = 0x8FD19A8
+CONTACT_CACHE_VTABLE_RVA = 0x916B1F8
 
 
 def read_contact_name(read_memory, core_base, wxid, *, expected_account=None):

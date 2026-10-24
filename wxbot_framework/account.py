@@ -1,4 +1,4 @@
-"""微信 4.1.15.13 当前登录账号的只读快照，不保存账号缓存。"""
+"""微信 4.1.15.55 当前登录账号的只读快照，不保存账号缓存。"""
 from __future__ import annotations
 
 import struct
@@ -6,11 +6,11 @@ import struct
 from .text import SYSTEM_PEERS, validate_target
 
 # 由该版本的反汇编及当前进程核对；使用前后端已校验核心 DLL SHA256。
-APP_GLOBAL_RVA = 0xB912690
-APP_VTABLE_RVA = 0x8D804E8
-CONTEXT_VTABLE_RVA = 0x8DFE2F8
+APP_GLOBAL_RVA = 0xBB92FC0
+APP_VTABLE_RVA = 0x8F514E8
+CONTEXT_VTABLE_RVA = 0x8FD1498
 APP_CONTEXT_GETTER_RVA = 0x469A0  # app 虚表 +0x60，返回 app +0x68 的 shared_ptr。
-IDENTITY_GETTER_RVA = 0x36F930   # context 虚表 +0x18，LEA RAX,[RCX+0x48]; RET。
+IDENTITY_GETTER_RVA = 0x3855C0   # context 虚表 +0x18，LEA RAX,[RCX+0x48]; RET。
 
 
 def _pointer(value):

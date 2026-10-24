@@ -110,7 +110,7 @@ static bool core_fingerprint(HMODULE core) {
                               nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (file == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER size{};
-    bool valid = GetFileSizeEx(file, &size) && size.QuadPart == 201552944;
+    bool valid = GetFileSizeEx(file, &size) && size.QuadPart == 204304944;
     BCRYPT_ALG_HANDLE algorithm = nullptr;
     BCRYPT_HASH_HANDLE hash = nullptr;
     if (valid && BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0) {
@@ -124,8 +124,8 @@ static bool core_fingerprint(HMODULE core) {
                 valid = BCryptHashData(hash, buffer, count, 0) >= 0;
             }
             static constexpr unsigned char expected[] = {
-                0x10,0xf8,0xe9,0x95,0x45,0x3e,0x2d,0xa4,0x6d,0x4f,0x2b,0x50,0x80,0xcd,0x6d,0xa1,
-                0xf1,0x3c,0xc5,0x14,0x77,0x46,0xad,0xc1,0x19,0xce,0xae,0x38,0xcb,0x03,0x9d,0xe5
+                0x6f,0xbb,0xba,0x53,0x6b,0x04,0xc0,0xa2,0x47,0x30,0x71,0x0f,0x54,0x08,0x87,0xa5,
+                0x3f,0x4e,0xaa,0x24,0x39,0x8e,0x4f,0x94,0x90,0x5d,0x9b,0x4a,0x36,0x14,0x85,0x95
             };
             valid = valid && BCryptFinishHash(hash, digest, sizeof(digest), 0) >= 0 &&
                 std::equal(std::begin(digest), std::end(digest), std::begin(expected));
@@ -165,7 +165,7 @@ static bool set_native_string(SmallString* string, const char* text) {
     if (length < 16) return set_inline(string, text);
     if (length > 1023 || string->capacity != 15 || string->length != 0) return false;
     using Allocate = void* (__fastcall*)(size_t);
-    char* buffer = static_cast<char*>(reinterpret_cast<Allocate>(core_base + 0x74ab89c)(length + 1));
+    char* buffer = static_cast<char*>(reinterpret_cast<Allocate>(core_base + 0x754c41c)(length + 1));
     if (!buffer) return false;
     std::memcpy(buffer, text, length + 1);
     std::memcpy(string->data, &buffer, sizeof(buffer));
@@ -177,7 +177,7 @@ static void free_native_string(SmallString* string) {
     if (string->capacity > 15) {
         void* allocation = *reinterpret_cast<void**>(string->data);
         using Free = void (__fastcall*)(void*, size_t);
-        reinterpret_cast<Free>(core_base + 0x74ab8e0)(allocation, string->capacity + 1);
+        reinterpret_cast<Free>(core_base + 0x754c458)(allocation, string->capacity + 1);
     }
     *string = {};
     string->capacity = 15;
@@ -200,11 +200,11 @@ static void native_test(uintptr_t base, void* manager, TestResult* report) {
     __try {
         report->stage = 1;
         using Factory = SharedMessage* (__fastcall*)(SharedMessage*);
-        reinterpret_cast<Factory>(base + 0x6f4c70)(&message);
+        reinterpret_cast<Factory>(base + 0x709d40)(&message);
         if (!message.object || !message.control) { report->stage = 11; return; }
         auto object = static_cast<unsigned char*>(message.object);
         report->vtable_rva = *reinterpret_cast<uintptr_t*>(object) - base;
-        if (report->vtable_rva != 0x8e53588) { report->stage = 12; release_shared(message); return; }
+        if (report->vtable_rva != 0x9026b78) { report->stage = 12; release_shared(message); return; }
         if (!set_inline(reinterpret_cast<SmallString*>(object + 0xb0), "filehelper") ||
             !set_inline(reinterpret_cast<SmallString*>(object + 0x758), "WXNATIVE_TEST_2")) {
             report->stage = 13; release_shared(message); return;
@@ -214,7 +214,7 @@ static void native_test(uintptr_t base, void* manager, TestResult* report) {
         // other fields at the constructor's defaults rather than borrowing
         // unverified offsets from an older version.
         report->stage = 2;
-        auto send = original_send ? original_send : reinterpret_cast<SendFunction>(base + 0x178f100);
+        auto send = original_send ? original_send : reinterpret_cast<SendFunction>(base + 0x178f780);
         // The native function consumes one strong reference to its argument.
         // Retain the factory's reference separately from that transferred copy.
         SharedMessage transferred = message;
@@ -237,7 +237,7 @@ static void native_test(uintptr_t base, void* manager, TestResult* report) {
                 allocation_size += 39;
             }
             using Free = void(__fastcall*)(void*, size_t);
-            reinterpret_cast<Free>(base + 0x74ab8e0)(allocation, allocation_size);
+            reinterpret_cast<Free>(base + 0x754c458)(allocation, allocation_size);
         }
         report->stage = 4;
     } __except (record_exception(GetExceptionInformation(), report)) {
@@ -299,11 +299,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxArmSelfTest(void* parameter) {
     triggered_once = 0;
     MH_STATUS status = MH_Initialize();
     if (status != MH_OK) return 600 + status;
-    status = MH_CreateHook(reinterpret_cast<void*>(core_base + 0x178f100),
+    status = MH_CreateHook(reinterpret_cast<void*>(core_base + 0x178f780),
                            reinterpret_cast<void*>(&hooked_send), reinterpret_cast<void**>(&original_send));
     if (status != MH_OK) { MH_Uninitialize(); return 600 + status; }
-    status = MH_EnableHook(reinterpret_cast<void*>(core_base + 0x178f100));
-    if (status != MH_OK) { MH_RemoveHook(reinterpret_cast<void*>(core_base + 0x178f100)); MH_Uninitialize(); }
+    status = MH_EnableHook(reinterpret_cast<void*>(core_base + 0x178f780));
+    if (status != MH_OK) { MH_RemoveHook(reinterpret_cast<void*>(core_base + 0x178f780)); MH_Uninitialize(); }
     hook_created = status == MH_OK;
     return status == MH_OK ? 0 : 600 + status;
 }
@@ -363,7 +363,7 @@ static DWORD dispatch_on_native_task(void* parameter) {
         // The native builder owns scheduling, message allocation and the
         // completion reference. No UI input or user message is required.
         using Builder = void (__fastcall*)(void*, TextRequest*, SmallString*, Completion**);
-        reinterpret_cast<Builder>(core_base + 0x54b02f0)(nullptr, &request, &description, &completion);
+        reinterpret_cast<Builder>(core_base + 0x55c9be0)(nullptr, &request, &description, &completion);
         report.stage = 20;
     } __except (record_exception(GetExceptionInformation(), &report)) {
         write_report(config, report, "WXNATIVE_TEST_3");
@@ -398,7 +398,7 @@ static DWORD schedule_task(const TestConfig& config, std::function<void()>* call
         reinterpret_cast<Scheduler>(core_base + 0x47310)(app, &scheduler);
         if (!scheduler.object || !scheduler.control) return ERROR_NOT_READY;
         using Schedule = SharedMessage* (__fastcall*)(void*, SharedMessage*, Location*, std::function<void()>*, uint32_t);
-        reinterpret_cast<Schedule>(core_base + 0x2fb010)(scheduler.object, &future, &location, callable, 1);
+        reinterpret_cast<Schedule>(core_base + 0x30f9f0)(scheduler.object, &future, &location, callable, 1);
         release_shared(future);
         release_shared(scheduler);
     } __except (record_exception(GetExceptionInformation(), &error)) {
@@ -495,7 +495,7 @@ static DWORD start_receive(void* parameter, bool queue_mode) {
     ReleaseSRWLockExclusive(&receive_lock);
     MH_STATUS status = MH_Initialize();
     if (status != MH_OK) return 600 + status;
-    void* target = reinterpret_cast<void*>(core_base + 0x17b9010);
+    void* target = reinterpret_cast<void*>(core_base + 0x17b9020);
     status = MH_CreateHook(target, reinterpret_cast<void*>(&hooked_receive), reinterpret_cast<void**>(&original_receive));
     if (status != MH_OK) { MH_Uninitialize(); return 600 + status; }
     status = MH_EnableHook(target);
@@ -536,18 +536,18 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxWaitForTasks(void*) {
 }
 
 extern "C" __declspec(dllexport) DWORD WINAPI WxRemoveSelfTest(void*) {
-    const auto target = reinterpret_cast<void*>(core_base + 0x178f100);
+    const auto target = reinterpret_cast<void*>(core_base + 0x178f780);
     MH_STATUS status = MH_OK;
     if (hook_created) {
         status = MH_DisableHook(target);
         if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
     }
-    void* receive_target = reinterpret_cast<void*>(core_base + 0x17b9010);
+    void* receive_target = reinterpret_cast<void*>(core_base + 0x17b9020);
     if (receive_hook_created) {
         status = MH_DisableHook(receive_target);
         if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;
     }
-    void* factory_target = reinterpret_cast<void*>(core_base + 0x6f4c70);
+    void* factory_target = reinterpret_cast<void*>(core_base + 0x709d40);
     if (factory_hook_created) {
         status = MH_DisableHook(factory_target);
         if (status != MH_OK && status != MH_ERROR_DISABLED) return 600 + status;

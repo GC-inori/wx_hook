@@ -25,7 +25,7 @@ static SharedMessage* __fastcall mention_factory(SharedMessage* output) {
             static_cast<MentionContext*>(TlsGetValue(factory_tls));
         if (context) {
             auto object = output ? static_cast<unsigned char*>(output->object) : nullptr;
-            if (!object || *reinterpret_cast<uintptr_t*>(object) != core_base + 0x8e53588)
+            if (!object || *reinterpret_cast<uintptr_t*>(object) != core_base + 0x9026b78)
                 RaiseException(ERROR_INVALID_DATA, 0, 0, nullptr);
             // 实机真正艾特样本：最后两个 std::string 分别为正文 +0x758、成员列表 +0x778。
             auto members = reinterpret_cast<SmallString*>(object + 0x778);
@@ -48,7 +48,7 @@ static DWORD ensure_mention_factory() {
         if (initialized_here) MH_Uninitialize();
         return ERROR_NOT_ENOUGH_MEMORY;
     }
-    void* target = reinterpret_cast<void*>(core_base + 0x6f4c70);
+    void* target = reinterpret_cast<void*>(core_base + 0x709d40);
     status = MH_CreateHook(target, reinterpret_cast<void*>(&mention_factory), reinterpret_cast<void**>(&original_factory));
     if (status == MH_OK) {
         status = MH_EnableHook(target);
@@ -132,7 +132,7 @@ static DWORD send_text_on_task(const TextConfig* config, const char* members = n
     }
     __try {
         using Builder = void (__fastcall*)(void*, TextRequest*, SmallString*, TextCompletion**);
-        reinterpret_cast<Builder>(core_base + 0x54b02f0)(nullptr, &request, &description, &completion);
+        reinterpret_cast<Builder>(core_base + 0x55c9be0)(nullptr, &request, &description, &completion);
         report.stage = 20;
     } __except (record_exception(GetExceptionInformation(), &report)) {
         write_report(config->base, report, "WXBOT_TEXT_SEND_EXCEPTION");
@@ -282,7 +282,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxStartTextReceiver(void* paramete
     ReleaseSRWLockExclusive(&receive_lock);
     MH_STATUS status = MH_Initialize();
     if (status != MH_OK) return 600 + status;
-    void* target = reinterpret_cast<void*>(core_base + 0x17b9010);
+    void* target = reinterpret_cast<void*>(core_base + 0x17b9020);
     status = MH_CreateHook(target, reinterpret_cast<void*>(&text_receive), reinterpret_cast<void**>(&original_receive));
     if (status != MH_OK) { MH_Uninitialize(); return 600 + status; }
     status = MH_EnableHook(target);
@@ -325,7 +325,7 @@ static void capture_mention_source(SharedMessage* message) {
     __try {
         if (!message || !message->object) return;
         const auto object = static_cast<const unsigned char*>(message->object);
-        if (*reinterpret_cast<const uintptr_t*>(object) != core_base + 0x8e53588) return;
+        if (*reinterpret_cast<const uintptr_t*>(object) != core_base + 0x9026b78) return;
         char body[1024]{};
         if (!copy_small_string(object, 0x758, body, sizeof(body)) || !std::strstr(body, "WXBOT_AT_PROBE")) return;
         if (_InterlockedCompareExchange(&triggered_once, 1, 0) != 0) return;
@@ -390,7 +390,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI WxArmMentionProbe(void* parameter)
     triggered_once = 0;
     MH_STATUS status = MH_Initialize();
     if (status != MH_OK) return 600 + status;
-    void* target = reinterpret_cast<void*>(core_base + 0x178f100);
+    void* target = reinterpret_cast<void*>(core_base + 0x178f780);
     status = MH_CreateHook(target, reinterpret_cast<void*>(&mention_probe_send), reinterpret_cast<void**>(&original_send));
     if (status != MH_OK) { MH_Uninitialize(); return 600 + status; }
     status = MH_EnableHook(target);

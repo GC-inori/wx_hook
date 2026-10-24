@@ -1,0 +1,41 @@
+# 微信机器人配置文件示例 (Go Bot Configuration Example)
+# 复制本文件为 config.yaml 并填入实际参数
+
+# 机器人核心配置
+bot:
+  wechat_account: "" # 绑定的微信号 (为空时自动识别登录账号)
+  ipc_socket: "/tmp/wx_bridge.sock" # Linux Unix Socket 端点
+  text_delay:
+    enabled: true
+    min_delay: 0.5
+    max_delay: 2.0
+  plugins:
+    echo:
+      enabled: true
+    mention_chat:
+      enabled: false
+    id_responder:
+      enabled: true
+    member_identity:
+      enabled: true
+    personality:
+      enabled: true
+
+# 日志输出配置
+logging:
+  dir: "logs" # 日志存放目录（默认位于当前程序所在目录的 logs/）
+  level: "info" # debug, info, warn, error
+  to_console: true # 是否同时输出至控制台终端
+
+# 大模型接口配置
+llm:
+  api_key: ""
+  base_url: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"
+
+# 群成员管理配置
+members:
+  database_file: "members.db"
+  history_enabled: true
+  daily_clear: true
+  groups: {}
