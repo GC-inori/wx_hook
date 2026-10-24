@@ -6,7 +6,7 @@ SOCKET_PATH="${WX_BRIDGE_SOCKET:-/tmp/wx_bridge.sock}"
 DEFAULT_BRIDGE_LIB="$ROOT_DIR/rust_bridge/target/release/librust_bridge.so"
 BRIDGE_LIB="${WX_BRIDGE_LIBRARY:-$DEFAULT_BRIDGE_LIB}"
 BOT_BIN="$ROOT_DIR/go_bot/go_bot"
-HTTP_PORT=8888
+HTTP_PORT="${HTTP_PORT:-8899}"
 
 # 1. 自动探测微信可执行文件路径
 if [[ -z "${WECHAT_BIN:-}" ]]; then
