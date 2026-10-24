@@ -157,8 +157,15 @@ if [[ "$USE_XVFB" -eq 1 ]]; then
 
   # 循环自动检测二维码并在控制台打印
   (
+    sleep 2.0
+    # 若存在历史授权，自动按下 Return 触发“确认登录”
+    if command -v xdotool >/dev/null 2>&1; then
+      DISPLAY=:99 xdotool key Return 2>/dev/null || true
+    fi
+
+    qr_found=0
     for retry in {1..12}; do
-      sleep 1.2
+      sleep 1.0
       if [[ -n "${WECHAT_PID:-}" ]] && ! kill -0 "$WECHAT_PID" 2>/dev/null; then
         break
       fi
@@ -166,6 +173,7 @@ if [[ "$USE_XVFB" -eq 1 ]]; then
       if [[ -f "$ROOT_DIR/qrcode.png" ]] && command -v zbarimg >/dev/null 2>&1; then
         qr_url=$(zbarimg -q --raw "$ROOT_DIR/qrcode.png" 2>/dev/null | head -n 1 || true)
         if [[ -n "$qr_url" ]]; then
+          qr_found=1
           echo ""
           echo "==================== [控制台扫码登录] ===================="
           if command -v qrencode >/dev/null 2>&1; then
@@ -181,6 +189,15 @@ if [[ "$USE_XVFB" -eq 1 ]]; then
         fi
       fi
     done
+
+    if [[ "$qr_found" -eq 0 && -d "/root/xwechat_files" ]]; then
+      echo ""
+      echo "==================== [快捷免扫码登录] ===================="
+      echo "检测到历史授权凭据，已自动向手机发送【登录确认】推送！"
+      echo "请直接在手机微信中点击【登录】确认即可进入主界面。"
+      echo "=========================================================="
+      echo ""
+    fi
   ) &
 fi
 

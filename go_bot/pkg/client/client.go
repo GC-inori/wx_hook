@@ -194,12 +194,13 @@ func logMMMojoRead(data json.RawMessage) {
 		Truncated       bool   `json:"truncated"`
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
-		log.Printf("[mmmojo_read] 无法解析事件: %v; data=%s", err, data)
 		return
 	}
-	log.Printf("[mmmojo_read] callback_type=%d request_id=%d request_size=%d attach_size=%d request_preview=%q attach_preview=%q truncated=%t",
-		event.CallbackType, event.RequestID, event.RequestDataSize, event.AttachDataSize,
-		event.RequestPreview, event.AttachPreview, event.Truncated)
+	// 只在携带业务数据（正文或附件 > 0）时记录，避免心跳和定时器刷屏
+	if event.RequestDataSize > 0 || event.AttachDataSize > 0 {
+		log.Printf("[Mojo管道-收到] 回调类型: %d, 请求ID: %d, 正文大小: %d 字节, 附件大小: %d 字节",
+			event.CallbackType, event.RequestID, event.RequestDataSize, event.AttachDataSize)
+	}
 }
 
 func logMMMojoWrite(data json.RawMessage) {
@@ -213,12 +214,29 @@ func logMMMojoWrite(data json.RawMessage) {
 		Truncated        bool    `json:"truncated"`
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
-		log.Printf("[mmmojo_write] 无法解析事件: %v; data=%s", err, data)
 		return
 	}
-	log.Printf("[mmmojo_write] method=%v sync=%v request_id=%v request_size=%v payload_available=%t preview=%q truncated=%t",
-		event.Method, event.Sync, event.RequestID, event.RequestDataSize,
-		event.PayloadAvailable, event.RequestPreview, event.Truncated)
+	methodVal := -1
+	if event.Method != nil {
+		methodVal = *event.Method
+	}
+	syncVal := false
+	if event.Sync != nil {
+		syncVal = *event.Sync
+	}
+	reqIDVal := uint32(0)
+	if event.RequestID != nil {
+		reqIDVal = *event.RequestID
+	}
+	reqSizeVal := uint64(0)
+	if event.RequestDataSize != nil {
+		reqSizeVal = *event.RequestDataSize
+	}
+	// 只在携带有效载荷且大小 > 0 时记录，避免空心跳刷屏
+	if reqSizeVal > 0 {
+		log.Printf("[Mojo管道-发出] 业务方法: %d, 同步: %t, 请求ID: %d, 数据大小: %d 字节",
+			methodVal, syncVal, reqIDVal, reqSizeVal)
+	}
 }
 
 func (c *Client) reconnect() {

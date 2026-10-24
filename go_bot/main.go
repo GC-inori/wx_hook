@@ -41,6 +41,28 @@ func initLogger(logDir string, toConsole bool) (*os.File, error) {
 	return f, nil
 }
 
+func detectLocalAccount() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "/root"
+	}
+	for _, baseDir := range []string{filepath.Join(home, "xwechat_files"), "/root/xwechat_files"} {
+		entries, err := os.ReadDir(baseDir)
+		if err == nil {
+			for _, e := range entries {
+				if e.IsDir() && strings.HasPrefix(e.Name(), "wxid_") {
+					lastIdx := strings.LastIndex(e.Name(), "_")
+					if lastIdx > 0 {
+						return e.Name()[:lastIdx]
+					}
+					return e.Name()
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func main() {
 	rootDirFlag := flag.String("root", "..", "项目根目录路径")
 	dllPathFlag := flag.String("dll", "", "Rust bridge library path (default: platform-specific)")
@@ -133,8 +155,24 @@ func main() {
 	if err == nil && account != "" {
 		ipcClient.SetSelfWxid(account)
 		log.Printf("当前微信账号已自动识别：%s；所有系统插件与监听通道已就绪！", account)
+	} else if localAcc := detectLocalAccount(); localAcc != "" {
+		ipcClient.SetSelfWxid(localAcc)
+		log.Printf("当前微信账号已自动识别：%s；所有系统插件与监听通道已就绪！", localAcc)
 	} else {
 		log.Printf("当前已连接到微信，等待微信完成登录...")
+		go func() {
+			for {
+				time.Sleep(1500 * time.Millisecond)
+				if acc := detectLocalAccount(); acc != "" {
+					ipcClient.SetSelfWxid(acc)
+					log.Printf("\n==========================================================")
+					log.Printf("🎉 微信登录成功！当前账号：%s", acc)
+					log.Printf("所有系统插件与监听通道已激活！可输入控制台指令: status, plugins, quit")
+					log.Printf("==========================================================\n")
+					break
+				}
+			}
+		}()
 	}
 
 	llmClient := llm.NewClient(cfg.LLM)
@@ -175,7 +213,15 @@ func main() {
 		switch cmd {
 		case "status":
 			fmt.Printf("微信 PID: %d\n", pid)
-			fmt.Printf("当前账号: %s\n", ipcClient.SelfWxid())
+			acc := ipcClient.SelfWxid()
+			if acc == "" {
+				acc = detectLocalAccount()
+			}
+			if acc != "" {
+				fmt.Printf("当前账号: %s (已登录)\n", acc)
+			} else {
+				fmt.Printf("当前账号: 未登录\n")
+			}
 			fmt.Printf("管道状态: 已连接\n")
 		case "plugins":
 			fmt.Println("已加载插件列表:")
@@ -226,4 +272,7 @@ func main() {
 			fmt.Printf("未知指令: %s。支持指令: status, plugins, enable, disable, send, quit\n", cmd)
 		}
 	}
+
+	// 如果标准输入关闭（例如后台挂起或 nohup），保持进程阻塞运行，直到收到退出信号
+	select {}
 }
