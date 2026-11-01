@@ -6,8 +6,12 @@ use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+pub mod account;
+pub mod events;
 pub mod ipc;
 pub mod logger;
+pub mod msg_hook;
+pub mod sender;
 
 use logger::{bridge_error, bridge_info};
 
@@ -60,8 +64,14 @@ static ORIGINAL_USER_DATA: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 #[link_section = ".init_array"]
 static INIT_ARRAY: unsafe extern "C" fn() = {
     unsafe extern "C" fn init() {
+        let exe = std::fs::read_link("/proc/self/exe").unwrap_or_default();
+        let exe_str = exe.to_string_lossy();
+        if !exe_str.ends_with("/wechat") && exe_str != "wechat" {
+            return;
+        }
         bridge_info!("Linux preload bridge mapped into host PID: {}", libc::getpid());
         ipc::start_unix_server();
+        msg_hook::start_hook();
     }
     init
 };
@@ -155,7 +165,15 @@ unsafe fn capture_read_field(
     (size, hex, preview, truncated)
 }
 
+fn is_debug_packets_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("WX_BRIDGE_CAPTURE_PACKETS").is_some())
+}
+
 unsafe fn emit_read_event(callback_type: c_int, request_id: u32, read_info: *const c_void) {
+    if !is_debug_packets_enabled() {
+        return;
+    }
     let (request_data_size, request_hex, request_preview, request_truncated) =
         capture_read_field(read_info, get_read_request_fn());
     let (attach_data_size, attach_hex, attach_preview, attach_truncated) =
@@ -402,6 +420,9 @@ fn write_metadata() -> &'static Mutex<HashMap<usize, WriteMetadata>> {
 }
 
 fn emit_write_event(metadata: Option<WriteMetadata>) {
+    if !is_debug_packets_enabled() {
+        return;
+    }
     let (
         method,
         sync,
@@ -471,11 +492,3 @@ pub extern "C" fn WxStartBridge() -> i32 {
     ipc::start_unix_server();
     0
 }
-
-extern "C" fn initialize_preload_bridge() {
-    ipc::start_unix_server();
-}
-
-#[used]
-#[link_section = ".init_array"]
-static PRELOAD_CONSTRUCTOR: extern "C" fn() = initialize_preload_bridge;

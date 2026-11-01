@@ -1,5 +1,5 @@
-use super::MAX_CAPTURE_BYTES;
 use super::logger::{bridge_error, bridge_info, bridge_warn};
+use super::MAX_CAPTURE_BYTES;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, BufReader, Write};
@@ -7,7 +7,7 @@ use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
@@ -19,16 +19,47 @@ const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
 #[derive(Deserialize)]
 struct IpcRequest {
     id: Option<Value>,
-    action: String,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default, rename = "type")]
+    type_name: Option<String>,
     data: Option<Value>,
 }
 
 #[derive(Serialize)]
 struct IpcResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<Value>,
     status: i32,
+    code: i32,
+    msg: String,
     error: String,
     data: Option<Value>,
+    result: Option<Value>,
+}
+
+fn make_response(id: Option<Value>, status: i32, error: &str, data: Option<Value>) -> IpcResponse {
+    let (code, msg) = match status {
+        0 => (200, "操作成功"),
+        -1 | 1 => (400, error),
+        3 => (401, "Account not ready or not logged in"),
+        4 | 404 => (404, "Not found"),
+        501 => (501, "Not implemented / In progress"),
+        _ => (500, error),
+    };
+    IpcResponse {
+        id,
+        status,
+        code,
+        msg: msg.to_owned(),
+        error: if status == 0 {
+            String::new()
+        } else {
+            error.to_owned()
+        },
+        result: data.clone(),
+        data,
+    }
 }
 
 struct ConnectedClient {
@@ -36,7 +67,7 @@ struct ConnectedClient {
 }
 
 static CONNECTED_CLIENTS: Mutex<Vec<Arc<ConnectedClient>>> = Mutex::new(Vec::new());
-static EVENT_SENDER: OnceLock<Sender<String>> = OnceLock::new();
+static EVENT_SENDER: OnceLock<SyncSender<String>> = OnceLock::new();
 static SERVER_RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// Queues one newline-delimited JSON event for all connected socket clients.
@@ -45,7 +76,8 @@ pub fn broadcast_event<T: Serialize>(event: &str, data: &T) {
         return;
     };
     if let Some(sender) = EVENT_SENDER.get() {
-        let _ = sender.send(line);
+        // Non-blocking try_send so slow socket consumers never stall host threads/coroutines
+        let _ = sender.try_send(line);
     }
 }
 
@@ -58,19 +90,24 @@ pub fn start_unix_server() {
         return;
     }
 
-    let _ = EVENT_SENDER.get_or_init(|| {
-        let (sender, receiver) = mpsc::channel();
-        let _ = thread::Builder::new()
+    if EVENT_SENDER.get().is_none() {
+        let (sender, receiver) = mpsc::sync_channel(2048);
+        if let Err(error) = thread::Builder::new()
             .name("wx-bridge-events".to_owned())
-            .spawn(move || dispatch_events(receiver));
-        sender
-    });
+            .spawn(move || dispatch_events(receiver))
+        {
+            bridge_error!("cannot start event dispatcher: {error}");
+            SERVER_RUNNING.store(false, Ordering::Release);
+            return;
+        }
+        let _ = EVENT_SENDER.set(sender);
+    }
 
-    let listener_started = thread::Builder::new()
+    if let Err(error) = thread::Builder::new()
         .name("wx-bridge-socket".to_owned())
         .spawn(run_listener)
-        .is_ok();
-    if !listener_started {
+    {
+        bridge_error!("cannot start socket listener: {error}");
         SERVER_RUNNING.store(false, Ordering::Release);
     }
 }
@@ -140,6 +177,10 @@ fn run_listener() {
         }
         match incoming {
             Ok(stream) => {
+                if lock_clients().len() >= 128 {
+                    bridge_warn!("client limit reached; rejecting socket connection");
+                    continue;
+                }
                 bridge_info!("New client connected to bridge socket");
                 if let Err(error) = stream.set_write_timeout(Some(WRITE_TIMEOUT)) {
                     bridge_error!("cannot configure client socket: {error}");
@@ -156,9 +197,14 @@ fn run_listener() {
                     writer: Mutex::new(writer),
                 });
                 lock_clients().push(client.clone());
-                let _ = thread::Builder::new()
+                let client_for_thread = client.clone();
+                if let Err(error) = thread::Builder::new()
                     .name("wx-bridge-client".to_owned())
-                    .spawn(move || handle_client(stream, client));
+                    .spawn(move || handle_client(stream, client_for_thread))
+                {
+                    bridge_error!("cannot start client reader: {error}");
+                    lock_clients().retain(|connected| !Arc::ptr_eq(connected, &client));
+                }
             }
             Err(error) => {
                 bridge_error!("socket accept failed: {error}");
@@ -167,7 +213,10 @@ fn run_listener() {
         }
     }
 
-    bridge_warn!("Socket listener exiting, removing socket: {}", path.display());
+    bridge_warn!(
+        "Socket listener exiting, removing socket: {}",
+        path.display()
+    );
     let _ = std::fs::remove_file(path);
     SERVER_RUNNING.store(false, Ordering::Release);
 }
@@ -196,12 +245,12 @@ fn handle_client(stream: UnixStream, client: Arc<ConnectedClient>) {
             Ok(0) => break,
             Ok(_) => {}
             Err(error) => {
-                let response = IpcResponse {
-                    id: None,
-                    status: -1,
-                    error: format!("invalid or oversized request: {error}"),
-                    data: None,
-                };
+                let response = make_response(
+                    None,
+                    -1,
+                    &format!("invalid or oversized request: {error}"),
+                    None,
+                );
                 let _ = write_response(&client, &response);
                 break;
             }
@@ -210,12 +259,7 @@ fn handle_client(stream: UnixStream, client: Arc<ConnectedClient>) {
         let request: IpcRequest = match serde_json::from_slice(&line) {
             Ok(request) => request,
             Err(error) => {
-                let response = IpcResponse {
-                    id: None,
-                    status: -1,
-                    error: format!("invalid JSON: {error}"),
-                    data: None,
-                };
+                let response = make_response(None, -1, &format!("invalid JSON: {error}"), None);
                 if write_response(&client, &response).is_err() {
                     break;
                 }
@@ -261,49 +305,423 @@ fn read_bounded_line<R: BufRead>(reader: &mut R, output: &mut Vec<u8>) -> io::Re
 
 fn process_request(request: IpcRequest) -> IpcResponse {
     let id = request.id;
-    match request.action.as_str() {
-        "ping" => IpcResponse {
-            id,
-            status: 0,
-            error: String::new(),
-            data: Some(json!({ "socket": "wx_bridge" })),
+    let action_str = request
+        .action
+        .as_deref()
+        .or(request.type_name.as_deref())
+        .unwrap_or_default();
+
+    match action_str {
+        "ping" | "checkWeChat" => make_response(id, 0, "", Some(json!({ "socket": "wx_bridge" }))),
+        "get_account" | "get_self_info" | "getSelfInfo" => match super::account::get_self_account()
+        {
+            Some((wxid, name)) => make_response(
+                id,
+                0,
+                "",
+                Some(json!({
+                    "account": wxid,
+                    "wxid": wxid,
+                    "name": name,
+                    "nickname": name,
+                })),
+            ),
+            None => make_response(id, 3, "Account not ready or not logged in", None),
+        },
+        "get_contact_name" | "getContactName" | "get_member_nick" | "getMemberNick" => {
+            let wxid = request
+                .data
+                .as_ref()
+                .and_then(|d| d.get("member_wxid").or_else(|| d.get("wxid")))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+
+            if wxid.is_empty() {
+                make_response(id, 1, "wxid is empty", None)
+            } else {
+                match super::account::get_contact_name(wxid) {
+                    Some(name) => {
+                        make_response(id, 0, "", Some(json!({ "name": name, "nickname": name })))
+                    }
+                    None => make_response(id, 4, "Contact not found in cache", None),
+                }
+            }
+        }
+        "send_text" | "sendText" => match parse_send_text(request.data.as_ref()) {
+            Ok((target, text, at_list)) => {
+                match super::sender::send_text_with_at(&target, &text, at_list.as_deref()) {
+                    Ok(()) => {
+                        make_response(id, 0, "", Some(json!({ "sent": true, "target": target })))
+                    }
+                    Err(error) => make_response(id, 1, &error, None),
+                }
+            }
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        "send_at_text" | "sendText2" => match parse_send_at_text(request.data.as_ref()) {
+            Ok((target, text, members)) => {
+                match super::sender::send_text_with_at(&target, &text, Some(&members)) {
+                    Ok(()) => make_response(
+                        id,
+                        0,
+                        "",
+                        Some(json!({ "sent": true, "target": target, "members": members })),
+                    ),
+                    Err(error) => make_response(id, 1, &error, None),
+                }
+            }
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        action if rich_message_type(action).is_some() => {
+            match parse_named_rich_message(action, request.data.as_ref()) {
+                Ok((target, msg_type, content, is_base64, subtype)) => {
+                    match super::sender::send_rich_message(
+                        &target, msg_type, &content, is_base64, subtype,
+                    ) {
+                        Ok(()) => make_response(
+                            id,
+                            0,
+                            "",
+                            Some(json!({ "sent": true, "target": target, "msg_type": msg_type })),
+                        ),
+                        Err(error) => make_response(id, 2, &error, None),
+                    }
+                }
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
+        "send_xml" | "sendXml" => match parse_send_xml(request.data.as_ref()) {
+            Ok((target, xml)) => match super::sender::send_xml(&target, &xml) {
+                Ok(()) => make_response(id, 0, "", Some(json!({ "sent": true, "target": target }))),
+                Err(error) => make_response(id, 1, &error, None),
+            },
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        "send_message" | "sendMessage" => match parse_send_message(request.data.as_ref()) {
+            Ok((target, msg_type, content, is_base64, subtype)) => {
+                match super::sender::send_rich_message(
+                    &target, msg_type, &content, is_base64, subtype,
+                ) {
+                    Ok(()) => make_response(
+                        id,
+                        0,
+                        "",
+                        Some(json!({ "sent": true, "target": target, "msg_type": msg_type })),
+                    ),
+                    Err(error) => make_response(id, 1, &error, None),
+                }
+            }
+            Err(error) => make_response(id, 1, &error, None),
         },
         "send_raw" => match parse_send_raw(request.data.as_ref()) {
             Ok((method, sync, request_id, payload)) => {
                 let result = unsafe { super::send_raw(method, sync, request_id, &payload) };
                 match result {
-                    Ok(sent) => IpcResponse {
+                    Ok(sent) => make_response(
                         id,
-                        status: if sent { 0 } else { 2 },
-                        error: if sent {
-                            String::new()
+                        if sent { 0 } else { 2 },
+                        if sent {
+                            ""
                         } else {
-                            "SendMMMojoWriteInfo returned false".to_owned()
+                            "SendMMMojoWriteInfo returned false"
                         },
-                        data: Some(json!({ "sent": sent, "bytes": payload.len() })),
-                    },
-                    Err(error) => IpcResponse {
-                        id,
-                        status: 2,
-                        error,
-                        data: None,
-                    },
+                        Some(json!({ "sent": sent, "bytes": payload.len() })),
+                    ),
+                    Err(error) => make_response(id, 2, &error, None),
                 }
             }
-            Err(error) => IpcResponse {
-                id,
-                status: 1,
-                error,
-                data: None,
-            },
+            Err(error) => make_response(id, 1, &error, None),
         },
-        other => IpcResponse {
+        "revoke_my_msg"
+        | "revokeMyMsg"
+        | "revoke_msg"
+        | "get_friend_list"
+        | "getFriendList"
+        | "get_group_list"
+        | "getGroupList"
+        | "get_member_list"
+        | "getMemberList"
+        | "get_public_list"
+        | "getPublicList"
+        | "get_label_list"
+        | "getLabelList"
+        | "query_obj"
+        | "queryObj"
+        | "query_group"
+        | "queryGroup"
+        | "create_group"
+        | "createGroup"
+        | "add_members"
+        | "addMembers"
+        | "invite_members"
+        | "inviteMembers"
+        | "del_members"
+        | "delMembers"
+        | "quit_group"
+        | "quitGroup"
+        | "edit_self_member_nick"
+        | "editSelfMemberNick"
+        | "agree_friend_req"
+        | "agreeFriendReq"
+        | "del_friend"
+        | "delFriend"
+        | "edit_obj_remark"
+        | "editObjRemark"
+        | "edit_remark"
+        | "confirm_trans"
+        | "confirmTrans"
+        | "return_trans"
+        | "returnTrans"
+        | "set_read_status"
+        | "setReadStatus"
+        | "decrypt_image"
+        | "decryptImage"
+        | "kill_wechat"
+        | "killWeChat"
+        | "edit_version"
+        | "editVersion"
+        | "get_login_status"
+        | "getLoginStatus"
+        | "get_login_qr_code"
+        | "getLoginQrCode"
+        | "set_download_image"
+        | "setDownloadImage"
+        | "get_auth_info"
+        | "getAuthInfo"
+        | "open_browser"
+        | "openBrowser"
+        | "run_cloud_function"
+        | "runCloudFunction"
+        | "auth_cami"
+        | "authCami" => make_response(
             id,
-            status: 404,
-            error: format!("unknown action: {other}"),
-            data: None,
-        },
+            501,
+            "Not implemented / In progress",
+            Some(json!({ "action": action_str, "implemented": false })),
+        ),
+        other => make_response(id, 4, &format!("unknown action: {other}"), None),
     }
+}
+
+fn parse_at_list(data: &Value) -> Result<Option<String>, String> {
+    let Some(value) = data.get("at_list").or_else(|| data.get("members")) else {
+        return Ok(None);
+    };
+    let list = if let Some(value) = value.as_str() {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    } else if let Some(values) = value.as_array() {
+        values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| "data.members must contain non-empty strings".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        return Err("data.at_list / data.members must be a string or string array".to_owned());
+    };
+    let list = list
+        .iter()
+        .map(|member| {
+            if member == "all" {
+                "notify@all"
+            } else {
+                member.as_str()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(if list.is_empty() { None } else { Some(list) })
+}
+
+fn parse_inline_at_tags(text: &str) -> (String, Option<String>) {
+    if !text.contains("[@,") {
+        return (text.to_owned(), None);
+    }
+    let mut out = String::new();
+    let mut ats = Vec::new();
+    let mut remaining = text;
+
+    while let Some(start) = remaining.find("[@,") {
+        out.push_str(&remaining[..start]);
+        let tag_rest = &remaining[start + 3..];
+        if let Some(end) = tag_rest.find(']') {
+            let tag_content = &tag_rest[..end];
+            let mut wxid = "";
+            let mut nick = "";
+            for part in tag_content.split(',') {
+                let kv: Vec<&str> = part.splitn(2, '=').collect();
+                if kv.len() == 2 {
+                    let k = kv[0].trim();
+                    let v = kv[1].trim();
+                    if k == "wxid" {
+                        wxid = v;
+                    } else if k == "nick" {
+                        nick = v;
+                    }
+                }
+            }
+
+            if !wxid.is_empty() {
+                if wxid == "all" {
+                    ats.push("notify@all".to_owned());
+                    out.push_str("@所有人\u{2005}");
+                } else {
+                    ats.push(wxid.to_owned());
+                    let display = if !nick.is_empty() { nick } else { wxid };
+                    out.push('@');
+                    out.push_str(display);
+                    out.push('\u{2005}');
+                }
+            }
+
+            remaining = &tag_rest[end + 1..];
+        } else {
+            out.push_str(&remaining[start..start + 3]);
+            remaining = tag_rest;
+        }
+    }
+    out.push_str(remaining);
+
+    let at_list = if !ats.is_empty() {
+        Some(ats.join(","))
+    } else {
+        None
+    };
+    (out, at_list)
+}
+
+fn parse_send_text(data: Option<&Value>) -> Result<(String, String, Option<String>), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "send_text requires a data object".to_owned())?;
+    let target = required_string(data, &["target", "wxid"])?.to_owned();
+    let raw_text = required_string(data, &["text", "msg"])?;
+
+    let (cleaned_text, inline_ats) = parse_inline_at_tags(raw_text);
+    let explicit_ats = parse_at_list(data)?;
+
+    let at_list = match (inline_ats, explicit_ats) {
+        (Some(a), Some(b)) => Some(format!("{a},{b}")),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+
+    Ok((target, cleaned_text, at_list))
+}
+
+fn parse_send_at_text(data: Option<&Value>) -> Result<(String, String, String), String> {
+    let (target, text, members) = parse_send_text(data)?;
+    let members = members
+        .ok_or_else(|| "send_at_text requires at_list, members, or inline @ tags".to_owned())?;
+    Ok((target, text, members))
+}
+
+fn rich_message_type(action: &str) -> Option<i32> {
+    match action {
+        "send_image" | "sendImage" => Some(3),
+        "send_file" | "sendFile" => Some(6),
+        "send_gif" | "sendGif" => Some(47),
+        "send_card" | "sendCard" => Some(42),
+        "send_share_url" | "sendShareUrl" => Some(5),
+        "send_applet" | "sendApplet" => Some(33),
+        "send_refer_text" | "sendReferText" => Some(57),
+        _ => None,
+    }
+}
+
+fn required_string<'a>(data: &'a Value, keys: &[&str]) -> Result<&'a str, String> {
+    for key in keys {
+        if let Some(value) = data.get(key) {
+            let value = value
+                .as_str()
+                .ok_or_else(|| format!("data.{key} must be a string"))?;
+            if value.trim().is_empty() {
+                return Err(format!("data.{key} must not be empty"));
+            }
+            return Ok(value);
+        }
+    }
+    Err(format!(
+        "data requires a non-empty string field: {}",
+        keys.join(" / ")
+    ))
+}
+
+fn optional_i32(data: &Value, keys: &[&str], default: i32) -> Result<i32, String> {
+    for key in keys {
+        if let Some(value) = data.get(key) {
+            return value
+                .as_i64()
+                .and_then(|n| i32::try_from(n).ok())
+                .ok_or_else(|| format!("data.{key} must be a 32-bit integer"));
+        }
+    }
+    Ok(default)
+}
+
+fn optional_base64(data: &Value) -> Result<bool, String> {
+    match data.get("is_base64") {
+        None => Ok(false),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| "data.is_base64 must be a boolean".to_owned()),
+    }
+}
+
+fn parse_named_rich_message(
+    action: &str,
+    data: Option<&Value>,
+) -> Result<(String, i32, String, bool, i32), String> {
+    let msg_type =
+        rich_message_type(action).ok_or_else(|| "unknown rich-message action".to_owned())?;
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| format!("{action} requires a data object"))?;
+    let target = required_string(data, &["target", "wxid"])?.to_owned();
+    // Structured cards/applets/references require the caller's native XML. Media
+    // actions also accept the path/URL/base64 string understood by the native sender.
+    let keys: &[&str] = match msg_type {
+        3 => &["xml", "content", "image", "img", "url", "path", "msg"],
+        6 => &["xml", "content", "file", "file_path", "path", "url", "msg"],
+        47 => &["xml", "content", "gif", "image", "url", "path", "msg"],
+        _ => &["xml", "content", "msg"],
+    };
+    let content = required_string(data, keys)?.to_owned();
+    let is_base64 = optional_base64(data)?;
+    let subtype = optional_i32(data, &["subtype"], 0)?;
+    Ok((target, msg_type, content, is_base64, subtype))
+}
+
+fn parse_send_xml(data: Option<&Value>) -> Result<(String, String), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "send_xml requires a data object".to_owned())?;
+    let target = required_string(data, &["target", "wxid"])?.to_owned();
+    let xml = required_string(data, &["xml", "content", "msg"])?.to_owned();
+    Ok((target, xml))
+}
+
+fn parse_send_message(data: Option<&Value>) -> Result<(String, i32, String, bool, i32), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "send_message requires a data object".to_owned())?;
+    let target = required_string(data, &["target", "wxid"])?.to_owned();
+    let msg_type = optional_i32(data, &["msg_type", "type"], 1)?;
+    let content = required_string(data, &["content", "xml", "msg"])?.to_owned();
+    let is_base64 = optional_base64(data)?;
+    let subtype = optional_i32(data, &["subtype"], 0)?;
+    Ok((target, msg_type, content, is_base64, subtype))
 }
 
 fn parse_send_raw(data: Option<&Value>) -> Result<(i32, bool, u32, Vec<u8>), String> {
@@ -375,9 +793,15 @@ fn write_json_line(client: &Arc<ConnectedClient>, bytes: &[u8]) -> io::Result<()
         .writer
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    writer.write_all(bytes)?;
-    writer.write_all(b"\n")?;
-    writer.flush()
+    let result = writer
+        .write_all(bytes)
+        .and_then(|()| writer.write_all(b"\n"))
+        .and_then(|()| writer.flush());
+    if result.is_err() {
+        // A partially written frame must never be reused for another response.
+        let _ = writer.shutdown(std::net::Shutdown::Both);
+    }
+    result
 }
 
 fn lock_clients() -> std::sync::MutexGuard<'static, Vec<Arc<ConnectedClient>>> {
@@ -389,6 +813,195 @@ fn lock_clients() -> std::sync::MutexGuard<'static, Vec<Arc<ConnectedClient>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn call(action: &str, data: Option<Value>) -> IpcResponse {
+        process_request(IpcRequest {
+            id: Some(json!(42)),
+            action: Some(action.to_owned()),
+            type_name: None,
+            data,
+        })
+    }
+
+    #[test]
+    fn responses_include_all_contract_fields_and_status_mapping() {
+        for (status, code, msg) in [
+            (0, 200, "操作成功"),
+            (3, 401, "Account not ready or not logged in"),
+            (4, 404, "Not found"),
+            (501, 501, "Not implemented / In progress"),
+        ] {
+            let response =
+                serde_json::to_value(make_response(Some(json!(42)), status, "detail", None))
+                    .unwrap();
+            assert_eq!(response["code"], code);
+            assert_eq!(response["status"], status);
+            assert_eq!(response["msg"], msg);
+            assert_eq!(response["id"], 42);
+            for field in ["code", "msg", "status", "error", "result", "data"] {
+                assert!(response.get(field).is_some(), "{field}");
+            }
+            assert!(response["data"].is_null());
+            assert!(response["result"].is_null());
+        }
+        let response = make_response(None, 0, "", Some(json!({"value": 1})));
+        assert_eq!(response.data, response.result);
+    }
+
+    #[test]
+    fn all_in_progress_actions_and_aliases_return_clean_501() {
+        let pairs = [
+            ("revoke_my_msg", "revokeMyMsg"),
+            ("get_friend_list", "getFriendList"),
+            ("get_group_list", "getGroupList"),
+            ("get_member_list", "getMemberList"),
+            ("get_public_list", "getPublicList"),
+            ("get_label_list", "getLabelList"),
+            ("query_obj", "queryObj"),
+            ("query_group", "queryGroup"),
+            ("create_group", "createGroup"),
+            ("add_members", "addMembers"),
+            ("invite_members", "inviteMembers"),
+            ("del_members", "delMembers"),
+            ("quit_group", "quitGroup"),
+            ("edit_self_member_nick", "editSelfMemberNick"),
+            ("agree_friend_req", "agreeFriendReq"),
+            ("del_friend", "delFriend"),
+            ("edit_obj_remark", "editObjRemark"),
+            ("confirm_trans", "confirmTrans"),
+            ("return_trans", "returnTrans"),
+            ("set_read_status", "setReadStatus"),
+            ("decrypt_image", "decryptImage"),
+            ("kill_wechat", "killWeChat"),
+            ("edit_version", "editVersion"),
+            ("get_login_status", "getLoginStatus"),
+            ("get_login_qr_code", "getLoginQrCode"),
+            ("set_download_image", "setDownloadImage"),
+            ("get_auth_info", "getAuthInfo"),
+            ("open_browser", "openBrowser"),
+            ("run_cloud_function", "runCloudFunction"),
+            ("auth_cami", "authCami"),
+        ];
+        for (snake, camel) in pairs {
+            for action in [snake, camel] {
+                let response = call(action, None);
+                assert_eq!((response.status, response.code), (501, 501), "{action}");
+                assert_eq!(response.msg, "Not implemented / In progress");
+                assert_eq!(response.id, Some(json!(42)));
+            }
+        }
+    }
+
+    #[test]
+    fn implemented_action_names_dispatch_to_validation() {
+        for action in [
+            "send_text",
+            "sendText",
+            "send_at_text",
+            "sendText2",
+            "send_xml",
+            "sendXml",
+            "send_image",
+            "sendImage",
+            "send_file",
+            "sendFile",
+            "send_gif",
+            "sendGif",
+            "send_card",
+            "sendCard",
+            "send_share_url",
+            "sendShareUrl",
+            "send_applet",
+            "sendApplet",
+            "send_refer_text",
+            "sendReferText",
+            "get_member_nick",
+            "getMemberNick",
+            "get_contact_name",
+        ] {
+            assert_eq!(call(action, None).code, 400, "{action}");
+        }
+        for action in ["get_account", "get_self_info", "getSelfInfo"] {
+            assert_eq!(call(action, None).code, 401, "{action}");
+        }
+        for action in ["ping", "checkWeChat"] {
+            assert_eq!(call(action, None).code, 200, "{action}");
+        }
+        assert_eq!(call("not_an_action", None).code, 404);
+        let response = process_request(IpcRequest {
+            id: None,
+            action: None,
+            type_name: Some("checkWeChat".into()),
+            data: None,
+        });
+        assert_eq!(response.code, 200);
+    }
+
+    #[test]
+    fn rich_actions_have_fixed_native_types_and_preserve_flags() {
+        for (snake, camel, expected_type) in [
+            ("send_image", "sendImage", 3),
+            ("send_file", "sendFile", 6),
+            ("send_gif", "sendGif", 47),
+            ("send_card", "sendCard", 42),
+            ("send_share_url", "sendShareUrl", 5),
+            ("send_applet", "sendApplet", 33),
+            ("send_refer_text", "sendReferText", 57),
+        ] {
+            for action in [snake, camel] {
+                let data = json!({"wxid": "target", "xml": "<msg/>", "is_base64": true, "subtype": 9, "msg_type": 999});
+                let (target, kind, content, base64, subtype) =
+                    parse_named_rich_message(action, Some(&data)).unwrap();
+                assert_eq!(
+                    (target.as_str(), kind, content.as_str(), base64, subtype),
+                    ("target", expected_type, "<msg/>", true, 9)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn media_aliases_and_strict_validation() {
+        for (action, field) in [
+            ("sendImage", "image"),
+            ("sendFile", "file"),
+            ("sendGif", "gif"),
+        ] {
+            let data = json!({"target": "wxid", field: "/tmp/media"});
+            assert!(parse_named_rich_message(action, Some(&data)).is_ok());
+        }
+        for data in [
+            json!({"target": "", "content": "x"}),
+            json!({"target": "x", "content": ""}),
+            json!({"target": "x", "content": "x", "is_base64": "yes"}),
+            json!({"target": "x", "content": "x", "subtype": 4294967296u64}),
+            json!([]),
+        ] {
+            assert!(parse_named_rich_message("sendFile", Some(&data)).is_err());
+        }
+        let mention = json!({"wxid": "room@chatroom", "msg": "Hi [@,wxid=wxid_a,nick=Alice]", "members": ["all"]});
+        let (_, text, members) = parse_send_at_text(Some(&mention)).unwrap();
+        assert!(text.contains("@Alice"));
+        assert_eq!(members, "wxid_a,notify@all");
+        assert!(
+            parse_send_at_text(Some(&json!({"target":"x", "text":"hi", "members":[1]}))).is_err()
+        );
+        assert!(parse_send_message(Some(
+            &json!({"target":"x", "content":"hi", "msg_type":4294967296u64})
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn bounds_request_lines() {
+        let mut bytes = Vec::new();
+        assert_eq!(
+            read_bounded_line(&mut &b"{}\nrest"[..], &mut bytes).unwrap(),
+            3
+        );
+        let oversized = vec![b'a'; MAX_REQUEST_LINE + 1];
+        assert!(read_bounded_line(&mut oversized.as_slice(), &mut bytes).is_err());
+    }
 
     #[test]
     fn decodes_hex_with_prefix_and_whitespace() {
