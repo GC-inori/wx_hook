@@ -1,93 +1,90 @@
-# 微信文本机器人框架
-项目已在linux.do公开声明https://linux.do/
+# WeChat Native Hook Gateway
 
+基于 Linux 原生微信 (v4.1.15.55) 的底座挂钩与 HTTP/WebSocket 协议网关服务，附带现代化 WebUI 控制台。
 
-面向 Windows x64、微信 4.1.15.13 的 Python 插件框架。统一入口为 `main.py`，原生桥接负责文本收发，功能以插件加载。
+## 架构概览
 
+本项目采用模块化分层设计：
 
-# 本项目仅供学习，请勿用于违法行为
+- **Rust 桥接层 (`rust_bridge/`)**：编译为 `librust_bridge.so`，利用 Linux `LD_PRELOAD` 原生挂钩机制注入微信主进程，拦截核心收发与事件逻辑，通过 Unix Domain Socket 提供高性能 IPC 通信通道。
+- **Go 网关服务 (`go_bot/`)**：负责管理 Linux Xvfb 无头桌面与微信进程生命周期，对外暴露 OneBot 11 标准协议 HTTP API、WebSocket 实时事件流与 REST 管理接口，并内嵌 WebUI 前端资产。
+- **现代化 WebUI (`web_ui/`)**：基于 Vue 3 + Tailwind CSS 构建，提供运行看板、微信扫码登录、网络端点管理（OneBot 11 HTTP/WS、Webhook 上报、反向 WebSocket 客户端）、出站防风控节流调度、执行日志实时终端、接口调试工作台与系统设置中心。
 
-## 功能
+---
 
-- 文件传输助手、好友和群聊文本收发，以及真正的群艾特。
-- 成语接龙：独立玩家、合并抢答和退出模式。
-- `/绑定 昵称`：只设置当前群的称呼；不同群各自保存。未绑定时使用联系人缓存中的微信名。
-- `/总结 昵称`、`/总结群聊`：通过配置的大模型总结当前群当天的文字记录。
-- `/切换人格 嘴臭|卑微|夸夸|取消`：为当前群的对话、总结和接龙点评设置表达风格。
-- 真正艾特机器人后对话，携带该成员在当前群当天此前最多十条有效发言。
-- 每天北京时间 0 点清理旧日文本；`/清空` 手动清理当前群文本。
-- 按文本长度随机等待后发送。
-- 插件启停、重载与开发模板。
+## 快速开始 (Linux)
 
-## 运行环境
+### 1. 部署运行
 
-Windows 10/11 x64、64 位 Python（已验证 Python 3.13）、`requirements.txt` 中的依赖，以及 Microsoft Visual C++ x64 运行库。
+在目标 Linux 机器（推荐 Debian 12 / Ubuntu 22.04+）上：
 
-## 首次配置
+```sh
+# 解压预编译归档包
+tar -xzf dist_linux.tar.gz
+cd dist_linux
 
-在项目目录运行：
-
-```powershell
-python -m pip install -r requirements.txt
-python tools/init_config.py
+# 检查环境并启动服务
+chmod +x wxbot librust_bridge.so
+./wxbot -root .
 ```
 
-1. `bot_config.json`：将 `wechat_account` 改为自己的机器人微信 ID。绑定保存的是账号 ID，重新登录后 PID 改变不影响选择；多开时会等待指定账号，不改用其他账号。
-2. `members_config.json`：在 `groups` 中添加自己要启用的群 ID，成员列表可以为空：
+### 2. 访问控制台
 
-```json
-{
-  "database_file": ".runtime/member_data.sqlite3",
-  "history_enabled": true,
-  "daily_clear": true,
-  "groups": {
-    "12345678@chatroom": []
-  }
-}
+网关默认启动并在 `http://127.0.0.1:8080`（或配置的 `gateway.listen`）提供 Web 控制台：
+
+- **扫码登录**：直接在 Web 控制台识别微信二维码并确认登录。
+- **运行看板**：查看系统负载、微信进程状态及实时事件流水。
+- **网络配置**：配置对接到 NoneBot2、Koishi 等下游机器人的 Webhook 上报端点。
+- **执行日志**：实时日志终端滚屏与级别过滤。
+- **接口调试**：直接在线发送文本、图片、文件、@群成员等微信 API 请求。
+
+---
+
+## 配置文件 (`config.yaml`)
+
+```yaml
+bot:
+  wechat_account: "" # 绑定的微信账号 wxid，留空自动获取登录账号
+  ipc_socket: "/tmp/wx_bridge.sock"
+
+launcher:
+  auto_start: true # 是否由网关自动拉起 Xvfb 与微信
+  wechat_bin: "" # 留空自动查找 /opt/wechat/wechat
+  bridge_lib: "./librust_bridge.so"
+  display: ":99"
+  use_xvfb: true
+  xvfb_screen: "1280x1024x24"
+  qr_port: 8899 # 临时二维码 HTTP 预览端口
+  qr_bind: "0.0.0.0"
+  login_timeout: 120
+
+gateway:
+  listen: "127.0.0.1:8080"
+  locale: "zh-CN" # zh-CN 或 en-US
+  api_token: "" # API 访问密钥，留空则免认证
+  allowed_origins: []
+  max_connections: 128
+
+policy:
+  anti_revoke: true # 开启消息防撤回监听
+  auto_agree_friend: false # 自动同意好友申请
+  auto_agree_group: true # 自动同意入群邀请
+  filter_gh: true # 过滤公众号推广推送
+  media_dir: "data/media"
+  retry_count: 3
+
+logging:
+  dir: "logs"
+  level: "info"
+  to_console: true
 ```
 
-3. `llm_config.json`：填写自己的 `api_key`、`base_url` 和 `model`。模板保留 DeepSeek 接口格式，密钥为空。
-4. 模板默认关闭需要模型的 `idiom_chain`、`chat_summary`、`mention_chat` 插件。填写模型配置后，把它们的 `enabled` 改为 `true`。
+---
 
-账号 ID 必须是实际微信 ID；群 ID 以 `@chatroom` 结尾。`test` 消息会由 `id_responder` 插件回复当前会话 ID，`chats` 控制台命令可以列出本次连接收到消息的会话。所有示例 ID 和测试用名称均为虚构数据。
+## 本地编译构建指南
 
-## 启动与验证
+详细的跨平台交叉编译与智能体分工指南参见 [agent.md](agent.md)。
 
-```powershell
-python main.py --check
-python main.py
-```
-
-`--check` 只检查配置、插件清单与语法，不注入微信，也不调用模型。正常运行前打开微信并登录配置中的账号。
-
-也可以运行 `start_bot.ps1`：脚本优先使用项目的 `.venv`，其次使用 PATH 中的 Python；可通过 `-Python` 或环境变量 `WXBOT_PYTHON` 指定解释器，不依赖某台电脑的安装路径。
-
-控制台命令：
-
-```text
-status
-chats
-members [群ID]
-history 称呼 [条数]
-plugins
-enable 插件名
-disable 插件名
-reload [插件名]
-quit
-```
-
-增加群、修改账号或成员配置后重启。停止时使用 `quit`，等待正常卸载原生桥接；微信可以保持打开。
-
-`wechat_account` 设为 `null` 时，原生收发层可以选择唯一登录账号；启用成员目录和群记录需要明确配置机器人账号，以隔离不同账号的数据。
-
-## 目录
-
-```text
-main.py                  统一入口
-wxbot_framework/         框架、成员目录、消息缓存、大模型客户端
-plugins/                 各功能插件和开发模板
-native/                  原生桥接源码、两个必要 DLL、版本指纹和 MinHook
-tests/                  本地测试
-tools/                   本地配置初始化和发布前检查
-```
-
+- **Rust 桥接库**：`cargo zigbuild --target x86_64-unknown-linux-gnu.2.36 --release`
+- **Go 机器人程序**：`$env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="amd64"; go build -ldflags "-s -w" -o wxbot_linux main.go`
+- **前端 WebUI**：`cd web_ui && npm run build`（产物自动输出至 `go_bot/pkg/gateway/web/dist`）
