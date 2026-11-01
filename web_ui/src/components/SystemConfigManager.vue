@@ -263,6 +263,22 @@
             />
           </div>
 
+          <!-- QQ 客户端强类型兼容模式 -->
+          <div class="p-3.5 bg-slate-50 dark:bg-white/[0.03] rounded-xl border border-slate-200/80 dark:border-white/5 flex items-center justify-between">
+            <div class="pr-4">
+              <div class="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                <span>{{ t('config.qqCompat') }}</span>
+                <span v-if="cfg.gateway.qq_compat" class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-normal">Active</span>
+              </div>
+              <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">{{ t('config.qqCompatDesc') }}</div>
+            </div>
+            <input
+              v-model="cfg.gateway.qq_compat"
+              type="checkbox"
+              class="w-4 h-4 rounded text-primary focus:ring-0 cursor-pointer shrink-0"
+            />
+          </div>
+
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">{{ t('config.maxConns') }}</label>
@@ -933,6 +949,7 @@ const defaultCfg = {
     locale: 'zh-CN',
     api_token: '',
     allowed_origins: [],
+    qq_compat: false,
     max_connections: 128,
     request_timeout_sec: 7,
     max_request_body_mb: 3,
@@ -1129,6 +1146,7 @@ const saveAllConfigs = async () => {
       locale: cfg.value.gateway.locale || 'zh-CN',
       api_token: cfg.value.gateway.api_token || '',
       allowed_origins: origins,
+      qq_compat: Boolean(cfg.value.gateway.qq_compat),
       max_connections: Number(cfg.value.gateway.max_connections) || 128,
       request_timeout_sec: Number(cfg.value.gateway.request_timeout_sec) || 7,
       max_request_body_mb: Number(cfg.value.gateway.max_request_body_mb) || 3,
@@ -1223,6 +1241,7 @@ gateway:
   locale: "${c.gateway.locale || 'zh-CN'}"
   api_token: "${c.gateway.api_token || ''}"
   allowed_origins:${originsYaml}
+  qq_compat: ${Boolean(c.gateway.qq_compat)}
   max_connections: ${c.gateway.max_connections || 128}
   request_timeout_sec: ${c.gateway.request_timeout_sec || 7}
   max_request_body_mb: ${c.gateway.max_request_body_mb || 3}
@@ -1321,6 +1340,7 @@ const onFileImported = (event) => {
           if (trimmed.startsWith('listen:')) cfg.value.gateway.listen = trimmed.replace('listen:', '').replace(/["']/g, '').trim()
           if (trimmed.startsWith('api_token:')) cfg.value.gateway.api_token = trimmed.replace('api_token:', '').replace(/["']/g, '').trim()
           if (trimmed.startsWith('locale:')) cfg.value.gateway.locale = trimmed.replace('locale:', '').replace(/["']/g, '').trim()
+          if (trimmed.startsWith('qq_compat:')) cfg.value.gateway.qq_compat = trimmed.includes('true')
           if (trimmed.startsWith('display:')) cfg.value.launcher.display = trimmed.replace('display:', '').replace(/["']/g, '').trim()
           if (trimmed.startsWith('qr_port:')) cfg.value.launcher.qr_port = parseInt(trimmed.replace('qr_port:', '').trim()) || 8899
           if (trimmed.startsWith('level:')) cfg.value.logging.level = trimmed.replace('level:', '').replace(/["']/g, '').trim()

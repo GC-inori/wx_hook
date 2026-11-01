@@ -63,6 +63,7 @@ gateway:
   locale: "zh-CN" # zh-CN 或 en-US
   api_token: "" # API 访问密钥，留空则免认证
   allowed_origins: []
+  qq_compat: false # 开启后自动将微信字符串 ID 双向映射为数字，供 napcat-bot-go 等 QQ 强类型客户端直连
   max_connections: 128
 
 policy:
