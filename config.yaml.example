@@ -1,41 +1,70 @@
-# 微信机器人配置文件示例 (Go Bot Configuration Example)
-# 复制本文件为 config.yaml 并填入实际参数
-
-# 机器人核心配置
+# Linux 原生微信桥接与 HTTP/WebSocket 网关配置。
+# 复制为 config.yaml，运行 ./wxbot -root /opt/wx，无需启动脚本。
 bot:
-  wechat_account: "" # 绑定的微信号 (为空时自动识别登录账号)
-  ipc_socket: "/tmp/wx_bridge.sock" # Linux Unix Socket 端点
-  text_delay:
+  wechat_account: "" # 绑定的微信账号 wxid，留空自动获取登录账号
+  ipc_socket: "/tmp/wx_bridge.sock"
+  reconnect_interval_sec: 3 # IPC 断开后重连以及后台运行时的重试间隔秒数。
+
+launcher:
+  auto_start: true # false：只连接外部已启动的微信，不管理桌面、进程或登录。
+  wechat_bin: "" # 留空自动查找 /opt/wechat/wechat、/usr/bin/wechat、/opt/wechat-beta/wechat。
+  bridge_lib: "./librust_bridge.so" # 相对路径以 -root 为基准。
+  display: ":99" # 本地 X11 显示编号，可使用 :99.0。
+  use_xvfb: true # 显示不可连接时启动 Xvfb；false 时直接报错。
+  xvfb_screen: "1280x1024x24"
+  qr_port: 8899 # 临时二维码预览端口；0 关闭预览，仍可通过手机确认登录。
+  qr_bind: "0.0.0.0" # 登录期间免认证；不可信网络建议 127.0.0.1 + SSH 转发。
+  login_timeout: 120 # 登录等待秒数；超时会关闭预览并清理本次启动的进程。
+  bridge_wait_timeout: 30 # 等待微信桥接 IPC socket 就绪的最长秒数（至少 5）。
+  xvfb_wait_timeout: 5 # 等待 Xvfb 显示 socket 就绪的最长秒数（至少 1）。
+
+gateway:
+  listen: "127.0.0.1:8080"
+  locale: "zh-CN" # zh-CN 或 en-US。
+  api_token: "" # 建议 WX_GATEWAY_TOKEN；监听非回环地址时必须设置。
+  allowed_origins: [] # 额外允许的 WebSocket 浏览器来源，精确匹配。
+  max_connections: 128
+  request_timeout_sec: 7 # HTTP/WebSocket 动作调用的总超时秒数（至少 1）。
+  max_request_body_mb: 3 # HTTP 与 WebSocket 请求正文大小上限 MiB（至少 1）。
+  ws_queue_size: 256 # 每个 WebSocket 连接的事件与动作队列容量（至少 16）。
+  ws_ping_interval_sec: 20 # WebSocket Ping 心跳间隔秒数（至少 5）。
+
+policy:
+  at_sender: true # 回复群消息时是否默认 @ 消息发送者。
+  blacklist_wxids: [] # 不向这些 wxid 发送消息，同时不转发这些发送者的事件。
+  whitelist_groups: [] # 非空时，只转发来自这些群 wxid（@chatroom）的群事件。
+  anti_revoke: true # 开启消息防撤回监听
+  auto_agree_friend: false # 自动同意好友申请
+  auto_agree_group: true # 自动同意入群邀请
+  filter_gh: true # 过滤公众号推广推送
+  media_dir: "data/media" # 媒体文件缓存目录
+  retry_count: 3
+
+endpoints:
+  - id: "ep_default_http"
+    name: "OneBot 11 HTTP API 服务端"
+    type: "httpServer"
+    host: "0.0.0.0"
+    port: 8080
+    url: "/"
+    token: ""
+    heartbeat: 0
     enabled: true
-    min_delay: 0.5
-    max_delay: 2.0
-  plugins:
-    echo:
-      enabled: true
-    mention_chat:
-      enabled: false
-    id_responder:
-      enabled: true
-    member_identity:
-      enabled: true
-    personality:
-      enabled: true
+  - id: "ep_default_ws"
+    name: "OneBot 11 WebSocket 实时事件流"
+    type: "wsServer"
+    host: "0.0.0.0"
+    port: 8080
+    url: "/ws"
+    token: ""
+    heartbeat: 30000
+    enabled: true
 
-# 日志输出配置
 logging:
-  dir: "logs" # 日志存放目录（默认位于当前程序所在目录的 logs/）
-  level: "info" # debug, info, warn, error
-  to_console: true # 是否同时输出至控制台终端
-
-# 大模型接口配置
-llm:
-  api_key: ""
-  base_url: "https://api.deepseek.com/v1"
-  model: "deepseek-chat"
-
-# 群成员管理配置
-members:
-  database_file: "members.db"
-  history_enabled: true
-  daily_clear: true
-  groups: {}
+  dir: "logs"
+  level: "info"
+  to_console: true
+  max_size_mb: 50 # 单个日志文件达到此 MiB 数值后轮转。
+  max_backups: 7 # 保留的历史轮转文件数。
+  compress: false # 是否 gzip 压缩轮转后的日志。
+  log_buffer_size: 500 # /api/logs 保存的最新日志条目数量。
