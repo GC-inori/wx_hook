@@ -28,6 +28,7 @@ gateway:
   max_request_body_mb: 3 # HTTP 与 WebSocket 请求正文大小上限 MiB（至少 1）。
   ws_queue_size: 256 # 每个 WebSocket 连接的事件与动作队列容量（至少 16）。
   ws_ping_interval_sec: 20 # WebSocket Ping 心跳间隔秒数（至少 5）。
+  qq_compat: false # 将微信 ID 转换为 QQ OneBot 客户端可用的数字 ID。
 
 policy:
   at_sender: true # 回复群消息时是否默认 @ 消息发送者。

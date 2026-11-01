@@ -36,6 +36,7 @@ type GatewayConfig struct {
 	MaxRequestBodyMB  int      `yaml:"max_request_body_mb" json:"max_request_body_mb"`
 	WSQueueSize       int      `yaml:"ws_queue_size" json:"ws_queue_size"`
 	WSPingIntervalSec int      `yaml:"ws_ping_interval_sec" json:"ws_ping_interval_sec"`
+	QQCompat          bool     `yaml:"qq_compat" json:"qq_compat"`
 }
 
 type EndpointConfig struct {

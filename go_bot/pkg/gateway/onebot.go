@@ -127,10 +127,17 @@ func (s *Server) limitedOneBotActionResponse(ctx context.Context, action string,
 
 func (s *Server) oneBotActionResponse(ctx context.Context, action string, params, echo json.RawMessage) protocol.Response {
 	result := s.dispatchOneBotAction(ctx, action, params)
-	return protocol.NewResponse(result.retcode, result.data, result.message, echo)
+	data := result.data
+	if cfg := s.currentGatewayConfig(); cfg.QQCompat && s.idMapper != nil {
+		data = s.idMapper.TranslateActionResponseData(action, data)
+	}
+	return protocol.NewResponse(result.retcode, data, result.message, echo)
 }
 
 func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw json.RawMessage) oneBotCallResult {
+	if cfg := s.currentGatewayConfig(); cfg.QQCompat && s.idMapper != nil {
+		raw = s.idMapper.TranslateActionParams(action, raw)
+	}
 	if strings.TrimSpace(rawString(raw)) == "" {
 		raw = json.RawMessage(`{}`)
 	}
@@ -163,6 +170,8 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 		return s.callNative(ctx, "getFriendList", json.RawMessage(`{}`))
 	case "get_group_list":
 		return s.callNative(ctx, "getGroupList", json.RawMessage(`{}`))
+	case "get_group_root_files", "get_group_files_by_folder", "get_group_file_url":
+		return oneBotCallResult{data: map[string]any{"files": []any{}, "folders": []any{}}}
 	case "get_group_member_list":
 		group := rawParamString(params, "group_id")
 		if group == "" {
@@ -279,6 +288,10 @@ func (s *Server) oneBotSendMessage(ctx context.Context, action string, params ma
 				text.WriteString(qq)
 				text.WriteRune('\u2005')
 			}
+		case "reply":
+			// Native WeChat message sending has no reply-reference primitive; ignore
+			// the reference segment while sending any following text or media.
+			continue
 		case "image", "file":
 			if failed := flushText(); failed != nil {
 				return *failed

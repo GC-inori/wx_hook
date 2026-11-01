@@ -63,6 +63,7 @@ type Server struct {
 	catalog         *i18n.Catalog
 	mux             *http.ServeMux
 	hub             *eventHub
+	idMapper        *IDMapper
 	pacer           *OutboundPacer
 	requests        chan struct{}
 	logs            *logBuffer
@@ -79,7 +80,7 @@ type Server struct {
 func New(caller Caller, cfg config.GatewayConfig, catalog *i18n.Catalog) *Server {
 	cfg = gatewayDefaults(cfg)
 	storedConfig := config.Config{Gateway: cloneGatewayConfig(cfg)}
-	s := &Server{caller: caller, cfg: cfg, fullConfig: &storedConfig, catalog: catalog, mux: http.NewServeMux(), hub: newEventHub(cfg.MaxConnections), pacer: NewOutboundPacer(config.PolicyConfig{}), requests: make(chan struct{}, 128), logs: newLogBuffer(maxLogEntries), started: time.Now(), wsClients: make(map[string]*wsClient)}
+	s := &Server{caller: caller, cfg: cfg, fullConfig: &storedConfig, catalog: catalog, mux: http.NewServeMux(), hub: newEventHub(cfg.MaxConnections), idMapper: newIDMapper(), pacer: NewOutboundPacer(config.PolicyConfig{}), requests: make(chan struct{}, 128), logs: newLogBuffer(maxLogEntries), started: time.Now(), wsClients: make(map[string]*wsClient)}
 	s.mux.HandleFunc("POST /{$}", s.handleOneBotHTTP)
 	s.mux.HandleFunc("/api", s.handleOneBotHTTP)
 	s.mux.HandleFunc("/ws", s.handleWS)
@@ -170,6 +171,11 @@ func (s *Server) SetConfig(cfg *config.Config, rootDir string) {
 	}
 	copy := cloneConfig(*cfg)
 	copy.RootDir = rootDir
+	if s.idMapper != nil {
+		if err := s.idMapper.SetRootDir(rootDir); err != nil {
+			log.Printf("load OneBot ID mappings: %v", err)
+		}
+	}
 	s.cfgMu.Lock()
 	s.fullConfig = &copy
 	s.cfg = cloneGatewayConfig(copy.Gateway)
@@ -580,23 +586,23 @@ func (s *Server) Publish(event client.Event) {
 	if event.Timestamp == "" {
 		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	s.hub.publish(event, currentSelfID(s))
-	if payload, err := marshalWebsocketEvent(event, currentSelfID(s)); err == nil {
-		s.publishWSClients(payload)
+	selfID := currentSelfID(s)
+	payload, err := marshalWebsocketEvent(event, selfID)
+	if err == nil && cfg.Gateway.QQCompat && s.idMapper != nil {
+		payload, err = json.Marshal(s.idMapper.TranslateEvent(formatOneBotEvent(event, selfID)))
 	}
-	for _, endpoint := range cfg.Endpoints {
-		if endpoint.Enabled && endpoint.Type == "httpClient" {
-			go s.pushWebhook(endpoint, event)
+	if err == nil {
+		s.hub.publishPayload(payload)
+		s.publishWSClients(payload)
+		for _, endpoint := range cfg.Endpoints {
+			if endpoint.Enabled && endpoint.Type == "httpClient" {
+				go s.pushWebhook(endpoint, payload)
+			}
 		}
 	}
 }
 
-func (s *Server) pushWebhook(endpoint config.EndpointConfig, event client.Event) {
-	payload, err := marshalWebsocketEvent(event, currentSelfID(s))
-	if err != nil {
-		log.Printf("webhook %q: encode event: %v", endpoint.ID, err)
-		return
-	}
+func (s *Server) pushWebhook(endpoint config.EndpointConfig, payload []byte) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.URL, strings.NewReader(string(payload)))

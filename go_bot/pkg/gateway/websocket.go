@@ -66,7 +66,13 @@ func (h *eventHub) publish(event client.Event, selfIDs ...string) {
 		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	payload, err := marshalWebsocketEvent(event, selfIDs...)
-	if err != nil {
+	if err == nil {
+		h.publishPayload(payload)
+	}
+}
+
+func (h *eventHub) publishPayload(payload []byte) {
+	if len(payload) == 0 {
 		return
 	}
 	h.mu.Lock()

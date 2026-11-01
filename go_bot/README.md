@@ -31,6 +31,7 @@ gateway:
   locale: zh-CN
   api_token: ""
   allowed_origins: []
+  qq_compat: false # 开启后自动将微信字符串 ID 双向映射为数字，适用于 napcat-bot-go 等 QQ 强类型客户端
   max_connections: 128
 logging:
   dir: logs

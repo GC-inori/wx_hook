@@ -11,7 +11,7 @@ import (
 func TestSaveConfigRoundTripsPolicyAndEndpoints(t *testing.T) {
 	root := t.TempDir()
 	cfg := &Config{
-		Gateway:  GatewayConfig{Listen: "127.0.0.1:8081", Locale: "en-US", MaxConnections: 64},
+		Gateway:  GatewayConfig{Listen: "127.0.0.1:8081", Locale: "en-US", MaxConnections: 64, QQCompat: true},
 		Logging:  LoggingConfig{Dir: "logs", Level: "debug", ToConsole: false},
 		Launcher: LauncherConfig{AutoStart: true, BridgeLib: "./bridge.so", Display: ":99", UseXvfb: true, XvfbScreen: "1280x1024x24", QRPort: 8899, QRBind: "127.0.0.1", LoginTimeout: 90},
 		Policy: PolicyConfig{
@@ -27,6 +27,9 @@ func TestSaveConfigRoundTripsPolicyAndEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if loaded.Gateway.QQCompat != cfg.Gateway.QQCompat {
+		t.Fatalf("QQ compatibility flag did not round-trip: got %v, want %v", loaded.Gateway.QQCompat, cfg.Gateway.QQCompat)
+	}
 	loadedPolicy, originalPolicy := loaded.Policy, cfg.Policy
 	loadedPolicy.BlacklistWxids, originalPolicy.BlacklistWxids = nil, nil
 	loadedPolicy.WhitelistGroups, originalPolicy.WhitelistGroups = nil, nil
@@ -37,8 +40,8 @@ func TestSaveConfigRoundTripsPolicyAndEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "policy:") || !strings.Contains(string(data), "endpoints:") {
-		t.Fatalf("configuration sections missing from YAML: %s", data)
+	if !strings.Contains(string(data), "policy:") || !strings.Contains(string(data), "endpoints:") || !strings.Contains(string(data), "qq_compat: true") {
+		t.Fatalf("configuration sections or QQ compatibility flag missing from YAML: %s", data)
 	}
 }
 
@@ -57,7 +60,7 @@ func TestDefaultsAndEnvironmentToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Gateway.Listen != "127.0.0.1:8080" || cfg.Gateway.Locale != "zh-CN" || cfg.Gateway.APIToken != "from-environment" || cfg.Gateway.MaxConnections != 128 {
+	if cfg.Gateway.Listen != "127.0.0.1:8080" || cfg.Gateway.Locale != "zh-CN" || cfg.Gateway.APIToken != "from-environment" || cfg.Gateway.MaxConnections != 128 || cfg.Gateway.QQCompat {
 		t.Fatalf("bad defaults: %+v", cfg.Gateway)
 	}
 	if want := DefaultPolicyConfig(); !reflect.DeepEqual(cfg.Policy, want) {

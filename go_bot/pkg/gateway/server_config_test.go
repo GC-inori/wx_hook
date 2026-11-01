@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,22 @@ import (
 	"wxbot/pkg/config"
 	"wxbot/pkg/protocol"
 )
+
+func TestGatewayDefaultsAndClonePreserveQQCompat(t *testing.T) {
+	cfg := gatewayDefaults(config.GatewayConfig{QQCompat: true})
+	if !cfg.QQCompat {
+		t.Fatal("gateway defaults disabled QQ compatibility")
+	}
+	cloned := cloneGatewayConfig(cfg)
+	if !cloned.QQCompat {
+		t.Fatal("gateway clone lost QQ compatibility")
+	}
+	configToValidate := validConfig("en-US")
+	configToValidate.Gateway.QQCompat = cloned.QQCompat
+	if err := configToValidate.Validate(); err != nil {
+		t.Fatalf("configuration validation rejected QQ compatibility: %v", err)
+	}
+}
 
 func TestConfiguredRequestTimeoutAndBodyLimit(t *testing.T) {
 	var remaining time.Duration
@@ -74,6 +91,41 @@ func TestWebSocketSettingsAndPolicyFilters(t *testing.T) {
 	s.Publish(client.Event{Event: "recvMsg", Data: json.RawMessage(`{"sender":"friend","receiver":"friend"}`)})
 	if len(peer.queue) != 2 {
 		t.Fatalf("allowed events queued = %d, want 2", len(peer.queue))
+	}
+}
+
+func TestQQCompatWebhookReceivesTranslatedEvent(t *testing.T) {
+	payloads := make(chan []byte, 1)
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read webhook body: %v", err)
+			return
+		}
+		payloads <- payload
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer webhook.Close()
+
+	server := testServer(t, "en-US", fakeCaller{}, "")
+	cfg := validConfig("en-US")
+	cfg.Gateway.QQCompat = true
+	cfg.Bot.WeChatAccount = "wxid_self"
+	cfg.Endpoints = []config.EndpointConfig{{ID: "compat-webhook", Type: "httpClient", URL: webhook.URL, Enabled: true}}
+	server.SetConfig(cfg, t.TempDir())
+	server.Publish(client.Event{Event: "recvMsg", Timestamp: "2026-10-31T12:00:00Z", Data: json.RawMessage(`{"msg_id":99,"from_wxid":"room@chatroom","final_from_wxid":"wxid_sender","text":"hello"}`)})
+
+	select {
+	case payload := <-payloads:
+		var event map[string]any
+		if err := json.Unmarshal(payload, &event); err != nil {
+			t.Fatal(err)
+		}
+		if event["self_id"] != float64(server.idMapper.UserWxidToNum("wxid_self")) || event["user_id"] != float64(server.idMapper.UserWxidToNum("wxid_sender")) || event["group_id"] != float64(server.idMapper.GroupChatroomToNum("room@chatroom")) || event["message_id"] != float64(server.idMapper.MessageIDToNum(int64(99))) {
+			t.Fatalf("webhook event IDs were not translated: %#v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for webhook event")
 	}
 }
 
