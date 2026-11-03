@@ -19,6 +19,15 @@ func formatOneBotEvent(event client.Event, selfID string) map[string]any {
 	case "recvMsg":
 		text := firstRawString(fields, "text", "msg")
 		segments := protocol.FormatMessage(text)
+		if mentions := parseMentionTargets(fields); len(mentions) != 0 && !containsAtSegment(segments) {
+			text = stripWechatMentionPrefix(text)
+			segments = protocol.FormatMessage(text)
+			atSegments := make([]protocol.Segment, 0, len(mentions))
+			for _, target := range mentions {
+				atSegments = append(atSegments, protocol.Segment{Type: "at", Data: map[string]any{"qq": target}})
+			}
+			segments = append(atSegments, segments...)
+		}
 		groupID := firstRawString(fields, "from_wxid", "group_id", "group_wxid", "receiver", "chat_id")
 		if !strings.HasSuffix(groupID, "@chatroom") {
 			groupID = firstRawString(fields, "group_id", "group_wxid", "receiver", "chat_id")
@@ -105,6 +114,90 @@ func formatOneBotEvent(event client.Event, selfID string) map[string]any {
 		base["sub_type"] = event.Event
 	}
 	return base
+}
+
+func parseMentionTargets(fields map[string]json.RawMessage) []string {
+	var source string
+	aliases := []string{"mentionsource", "source", "atuserlist", "mentionlist", "atlist"}
+	for _, alias := range aliases {
+		for key, raw := range fields {
+			if normalizeMentionKey(key) != alias {
+				continue
+			}
+			if json.Unmarshal(raw, &source) == nil && source != "" {
+				break
+			}
+		}
+		if source != "" {
+			break
+		}
+	}
+	if source == "" {
+		return nil
+	}
+
+	lowerSource := strings.ToLower(source)
+	const openTag, closeTag = "<atuserlist>", "</atuserlist>"
+	start := strings.Index(lowerSource, openTag)
+	if start < 0 {
+		return nil
+	}
+	start += len(openTag)
+	end := strings.Index(lowerSource[start:], closeTag)
+	if end < 0 {
+		return nil
+	}
+	list := strings.TrimSpace(source[start : start+end])
+	if strings.HasPrefix(list, "<![CDATA[") && strings.HasSuffix(list, "]]>") {
+		list = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(list, "<![CDATA["), "]]>"))
+	}
+
+	seen := make(map[string]struct{})
+	mentions := make([]string, 0)
+	for _, target := range strings.Split(list, ",") {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		if strings.EqualFold(target, "announcement@all") || strings.EqualFold(target, "notify@all") {
+			target = "all"
+		}
+		if _, exists := seen[target]; exists {
+			continue
+		}
+		seen[target] = struct{}{}
+		mentions = append(mentions, target)
+	}
+	return mentions
+}
+
+func normalizeMentionKey(key string) string {
+	return strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
+}
+
+func containsAtSegment(segments []protocol.Segment) bool {
+	for _, segment := range segments {
+		if segment.Type == "at" {
+			return true
+		}
+	}
+	return false
+}
+
+func stripWechatMentionPrefix(text string) string {
+	if !strings.HasPrefix(text, "@") {
+		return text
+	}
+	separator := strings.IndexAny(text[1:], "\u2005 ")
+	if separator < 1 {
+		return text
+	}
+	separator++
+	separatorLength := 1
+	if strings.HasPrefix(text[separator:], "\u2005") {
+		separatorLength = len("\u2005")
+	}
+	return text[separator+separatorLength:]
 }
 
 func rawMessageID(fields map[string]json.RawMessage, keys ...string) any {

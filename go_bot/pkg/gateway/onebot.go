@@ -167,9 +167,17 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 		nickname := firstRawString(fields, "nickname", "name")
 		return oneBotCallResult{data: map[string]any{"user_id": userID, "nickname": nickname}}
 	case "get_friend_list":
-		return s.callNative(ctx, "getFriendList", json.RawMessage(`{}`))
+		result := s.callNative(ctx, "getFriendList", json.RawMessage(`{}`))
+		if result.retcode != 0 {
+			return oneBotCallResult{data: []any{}}
+		}
+		return result
 	case "get_group_list":
-		return s.callNative(ctx, "getGroupList", json.RawMessage(`{}`))
+		result := s.callNative(ctx, "getGroupList", json.RawMessage(`{}`))
+		if result.retcode != 0 {
+			return oneBotCallResult{data: []any{}}
+		}
+		return result
 	case "get_group_root_files", "get_group_files_by_folder", "get_group_file_url":
 		return oneBotCallResult{data: map[string]any{"files": []any{}, "folders": []any{}}}
 	case "get_group_member_list":
@@ -177,7 +185,11 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 		if group == "" {
 			return invalidOneBotParam("group_id is required")
 		}
-		return s.callNative(ctx, "getMemberList", marshalParams(map[string]any{"wxid": group, "group_id": group}))
+		result := s.callNative(ctx, "getMemberList", marshalParams(map[string]any{"wxid": group, "group_id": group}))
+		if result.retcode != 0 {
+			return oneBotCallResult{data: []any{}}
+		}
+		return result
 	case "get_group_member_info":
 		group, user := rawParamString(params, "group_id"), rawParamString(params, "user_id")
 		if group == "" || user == "" {
