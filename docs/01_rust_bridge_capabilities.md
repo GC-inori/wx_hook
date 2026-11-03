@@ -69,6 +69,7 @@
 | **`sendXml`** | `send_xml` | 发送自定义 XML 卡片原生载荷 | `target`, `xml` | `{"sent": true}` |
 | **`sendMessage`** | `send_message` | 通用富媒体发送入口（按 msg_type 分发） | `target`, `msg_type`, `content` | `{"sent": true}` |
 | **`send_raw`** | - | Mojo 底层原始字节流投递 | `method`, `sync`, `request_id`, `payload` | `{"sent": true, "bytes": N}` |
+| **`agreeFriendReq`** | `agree_friend_req` | 使用微信 `VerifyUser` 函数提交同意好友申请请求（opcode 2）；在微信主线程执行 | `wxid`/`user_id`, `ticket`/`flag`, `encryptusername`, `scene`（默认 6）, `remark` | `{"agreed": true, "wxid": "..."}` |
 
 ---
 
@@ -100,7 +101,6 @@
    - `getPublicList` / `get_public_list`：获取已关注的微信公众号列表。
    - `getLabelList` / `get_label_list`：获取联系人标签列表。
 3. **关系链与群管理**：
-   - `agreeFriendReq` / `agree_friend_req`：程序自动同意好友申请。
    - `delFriend` / `del_friend`：删除指定好友。
    - `createGroup` / `create_group`：拉人建群。
    - `addMembers` / `inviteMembers`：拉好友进群 / 邀请进群。

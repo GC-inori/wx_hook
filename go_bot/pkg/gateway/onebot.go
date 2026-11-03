@@ -231,7 +231,39 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 		if flag == "" {
 			return invalidOneBotParam("flag is required")
 		}
-		return s.callNative(ctx, "agreeFriendReq", marshalParams(map[string]any{"flag": flag, "ticket": flag, "approve": rawParamBoolDefault(params, "approve", true), "remark": rawParamString(params, "remark")}))
+		if !rawParamBoolDefault(params, "approve", true) {
+			return oneBotCallResult{retcode: 1405, data: map[string]any{}, message: "rejecting friend requests is not supported by the native bridge"}
+		}
+		cached, _ := s.cachedFriendRequest(flag)
+		wxid := rawParamString(params, "wxid")
+		if wxid == "" {
+			wxid = rawParamString(params, "user_id")
+		}
+		if wxid == "" {
+			wxid = cached.Wxid
+		}
+		if wxid == "" {
+			return invalidOneBotParam("friend request details are not cached for this flag")
+		}
+		ticket := cached.Ticket
+		if ticket == "" {
+			ticket = flag
+		}
+		encryptusername := rawParamString(params, "encryptusername")
+		if encryptusername == "" {
+			encryptusername = cached.EncryptUsername
+		}
+		scene := cached.Scene
+		if explicitScene, ok := rawParamScene(params["scene"]); ok {
+			scene = explicitScene
+		}
+		if scene == 0 {
+			scene = 6
+		}
+		return s.callNative(ctx, "agreeFriendReq", marshalParams(map[string]any{
+			"wxid": wxid, "user_id": wxid, "ticket": ticket, "flag": flag,
+			"encryptusername": encryptusername, "scene": scene, "remark": rawParamString(params, "remark"),
+		}))
 	case "set_group_add_request":
 		return oneBotCallResult{retcode: 1405, data: map[string]any{}, message: "group add requests are not supported by the native bridge"}
 	case "send_xml", "send_card", "send_applet", "query_obj", "set_read_status":

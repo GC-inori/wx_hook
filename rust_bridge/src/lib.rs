@@ -6,7 +6,7 @@ pub mod hooks;
 pub mod ipc;
 #[cfg(windows)]
 pub mod minhook;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub mod offsets;
 #[cfg(windows)]
 pub mod wechat_abi;

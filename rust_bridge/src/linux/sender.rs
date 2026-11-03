@@ -418,6 +418,149 @@ pub fn send_text_with_at(target: &str, text: &str, at_list: Option<&str>) -> Res
     task.completion.wait(Duration::from_secs(5))
 }
 
+// ==================== 好友申请同意 ====================
+
+type VerifyUserFn = unsafe extern "C" fn(
+    result_buf: *mut u8,
+    context: usize,
+    wxid: *const StdString,
+    opcode: i32,
+    scene: u32,
+    scan_qrcode: i32,
+    ticket: *const StdString,
+    content: *const StdString,
+    encryptusername: *const StdString,
+) -> *mut u8;
+
+struct MainThreadVerifyUserTask {
+    wxid: String,
+    ticket: String,
+    encryptusername: String,
+    scene: u32,
+    remark: String,
+    completion: SendCompletion,
+}
+
+fn do_agree_friend_req_direct(
+    wxid: &str,
+    ticket: &str,
+    encryptusername: &str,
+    scene: u32,
+    remark: &str,
+) -> Result<(), String> {
+    let base = WECHAT_BASE.load(Ordering::Acquire);
+    if base == 0 {
+        return Err("微信主程序基址未初始化，暂无法处理好友申请".to_owned());
+    }
+    if super::account::get_self_account().is_none() {
+        return Err("微信未登录或账号未就绪，无法处理好友申请".to_owned());
+    }
+
+    let verify_fn: VerifyUserFn = unsafe { mem::transmute(base + crate::offsets::RVA_VERIFY_USER) };
+    let mut wxid_str = StdString::new(wxid);
+    let mut ticket_str = StdString::new(ticket);
+    let mut remark_str = StdString::new(remark);
+    let mut encryptusername_str = StdString::new(encryptusername);
+    let mut result_buf = [0u8; 128];
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        verify_fn(
+            result_buf.as_mut_ptr(),
+            0,
+            &wxid_str,
+            2,
+            scene,
+            0,
+            &ticket_str,
+            &remark_str,
+            &encryptusername_str,
+        )
+    }));
+
+    wxid_str.dispose();
+    ticket_str.dispose();
+    remark_str.dispose();
+    encryptusername_str.dispose();
+
+    match result {
+        Ok(result_ptr) => {
+            let response = if result_ptr.is_null() {
+                result_buf.as_mut_ptr()
+            } else {
+                result_ptr
+            };
+            if !unsafe { is_readable_ptr(response as *const u8) } {
+                return Err("VerifyUser returned an unreadable result pointer".to_owned());
+            }
+            if unsafe { *response } != 0 {
+                bridge_info!("[VERIFY-USER] 已提交好友申请同意: wxid={}, scene={}", wxid, scene);
+                Ok(())
+            } else {
+                bridge_error!("[VERIFY-USER] 微信未确认好友申请同意: wxid={}", wxid);
+                Err("VerifyUser returned an unsuccessful result".to_owned())
+            }
+        }
+        Err(_) => {
+            bridge_error!("[VERIFY-USER] 调用微信好友申请处理函数发生异常");
+            Err("agree_friend_req failed with exception in main thread".to_owned())
+        }
+    }
+}
+
+unsafe extern "C" fn main_thread_verify_user_dispatcher(data: *mut c_void) -> libc::c_int {
+    let task = Arc::from_raw(data as *const MainThreadVerifyUserTask);
+    if task.completion.begin() {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            do_agree_friend_req_direct(
+                &task.wxid,
+                &task.ticket,
+                &task.encryptusername,
+                task.scene,
+                &task.remark,
+            )
+        }))
+        .unwrap_or_else(|_| Err("main-thread VerifyUser dispatcher failed".to_owned()));
+        task.completion.finish(outcome);
+    }
+    0 // G_SOURCE_REMOVE
+}
+
+pub fn agree_friend_req(
+    wxid: &str,
+    ticket: &str,
+    encryptusername: &str,
+    scene: u32,
+    remark: &str,
+) -> Result<(), String> {
+    if wxid.trim().is_empty() {
+        return Err("wxid is empty".to_owned());
+    }
+    if ticket.trim().is_empty() {
+        return Err("ticket is empty".to_owned());
+    }
+    if is_main_thread() {
+        return do_agree_friend_req_direct(wxid, ticket, encryptusername, scene, remark);
+    }
+
+    let idle_add = get_g_idle_add().ok_or_else(|| "g_idle_add 未在进程中找到".to_owned())?;
+    let task = Arc::new(MainThreadVerifyUserTask {
+        wxid: wxid.to_owned(),
+        ticket: ticket.to_owned(),
+        encryptusername: encryptusername.to_owned(),
+        scene,
+        remark: remark.to_owned(),
+        completion: SendCompletion::new(),
+    });
+    let raw_ptr = Arc::into_raw(task.clone()) as *mut c_void;
+    if unsafe { idle_add(main_thread_verify_user_dispatcher, raw_ptr) } == 0 {
+        unsafe {
+            drop(Arc::from_raw(raw_ptr as *const MainThreadVerifyUserTask));
+        }
+        return Err("g_idle_add failed to schedule VerifyUser".to_owned());
+    }
+    task.completion.wait(Duration::from_secs(5))
+}
+
 // ==================== 富媒体与通用消息发送 ====================
 
 pub const RVA_SEND_MESSAGE: usize = 0x6f7d010;

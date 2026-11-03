@@ -83,6 +83,8 @@ policy:
   at_sender: false
   blacklist_wxids: [wxid_blocked]
   whitelist_groups: [room_allowed@chatroom]
+  friend_welcome_enabled: true
+  friend_welcome_message: "Welcome!"
 `)
 	if err := os.WriteFile(filepath.Join(root, "config.yaml"), contents, 0600); err != nil {
 		t.Fatal(err)
@@ -100,7 +102,7 @@ policy:
 	if cfg.Launcher.BridgeWaitTimeout != 45 || cfg.Launcher.XvfbWaitTimeout != 2 {
 		t.Fatalf("custom launcher wait options were not loaded: %+v", cfg.Launcher)
 	}
-	if cfg.Policy.AtSender || len(cfg.Policy.BlacklistWxids) != 1 || cfg.Policy.BlacklistWxids[0] != "wxid_blocked" || len(cfg.Policy.WhitelistGroups) != 1 || cfg.Policy.WhitelistGroups[0] != "room_allowed@chatroom" {
+	if cfg.Policy.AtSender || len(cfg.Policy.BlacklistWxids) != 1 || cfg.Policy.BlacklistWxids[0] != "wxid_blocked" || len(cfg.Policy.WhitelistGroups) != 1 || cfg.Policy.WhitelistGroups[0] != "room_allowed@chatroom" || !cfg.Policy.FriendWelcomeEnabled || cfg.Policy.FriendWelcomeMessage != "Welcome!" {
 		t.Fatalf("custom policy options were not loaded: %+v", cfg.Policy)
 	}
 }

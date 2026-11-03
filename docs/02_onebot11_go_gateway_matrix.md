@@ -51,7 +51,9 @@
 | :--- | :--- | :--- |
 | **`set_group_kick`** | `delMembers` | 移出群成员（依赖底层实现状态） |
 | **`set_group_leave`** | `quitGroup` | 退出指定微信群 |
-| **`set_friend_add_request`**| `agreeFriendReq` | 同意/拒绝好友申请 |
+| **`set_friend_add_request`**| `agreeFriendReq` | 根据 `flag` 查找缓存中的 wxid、ticket、encryptusername 与 scene 后同意好友申请；拒绝操作由底层桥接层暂不支持 |
+
+收到 `friendReq` 时，网关会按 ticket/flag 缓存申请信息；`policy.auto_agree_friend: true` 可启用自动同意。`policy.friend_welcome_enabled` 与 `policy.friend_welcome_message` 控制好友添加成功后的欢迎语。好友添加成功时，网关会发送 OneBot 11 `notice_type: "friend_add"` 通知。
 
 ### 5. 微信专属扩展动作
 | 扩展动作名 | 说明 |

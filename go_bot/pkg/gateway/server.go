@@ -72,6 +72,9 @@ type Server struct {
 	recvCount       atomic.Uint64
 	sendCount       atomic.Uint64
 	messageSequence atomic.Uint64
+	friendRequestMu sync.Mutex
+	friendRequests  map[string]cachedFriendRequest
+	friendAddedAt   map[string]time.Time
 	wsClientsMu     sync.Mutex
 	wsClients       map[string]*wsClient
 	closeOnce       sync.Once
@@ -80,7 +83,7 @@ type Server struct {
 func New(caller Caller, cfg config.GatewayConfig, catalog *i18n.Catalog) *Server {
 	cfg = gatewayDefaults(cfg)
 	storedConfig := config.Config{Gateway: cloneGatewayConfig(cfg)}
-	s := &Server{caller: caller, cfg: cfg, fullConfig: &storedConfig, catalog: catalog, mux: http.NewServeMux(), hub: newEventHub(cfg.MaxConnections), idMapper: newIDMapper(), pacer: NewOutboundPacer(config.PolicyConfig{}), requests: make(chan struct{}, 128), logs: newLogBuffer(maxLogEntries), started: time.Now(), wsClients: make(map[string]*wsClient)}
+	s := &Server{caller: caller, cfg: cfg, fullConfig: &storedConfig, catalog: catalog, mux: http.NewServeMux(), hub: newEventHub(cfg.MaxConnections), idMapper: newIDMapper(), pacer: NewOutboundPacer(config.PolicyConfig{}), requests: make(chan struct{}, 128), logs: newLogBuffer(maxLogEntries), started: time.Now(), wsClients: make(map[string]*wsClient), friendRequests: make(map[string]cachedFriendRequest), friendAddedAt: make(map[string]time.Time)}
 	s.mux.HandleFunc("POST /{$}", s.handleOneBotHTTP)
 	s.mux.HandleFunc("/api", s.handleOneBotHTTP)
 	s.mux.HandleFunc("/ws", s.handleWS)
@@ -582,6 +585,16 @@ func (s *Server) Publish(event client.Event) {
 	cfg := s.currentConfig()
 	if !eventAllowedByPolicy(event, cfg.Policy.BlacklistWxids, cfg.Policy.WhitelistGroups) {
 		return
+	}
+	switch event.Event {
+	case "friendReq":
+		if request, ok := s.cacheFriendRequest(event); ok && cfg.Policy.AutoAgreeFriend {
+			go s.autoAgreeFriend(request)
+		}
+	case "systemMsg", "recvMsg":
+		if wxid, matched := friendAddedSystemMessage(event, currentSelfID(s)); matched {
+			s.publishFriendAdded(wxid)
+		}
 	}
 	if event.Timestamp == "" {
 		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)

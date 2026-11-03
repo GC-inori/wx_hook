@@ -33,6 +33,12 @@ func eventAllowedByPolicy(event client.Event, policyBlacklist, groupWhitelist []
 		return true
 	}
 
+	if len(policyBlacklist) != 0 {
+		applicant := rawObject(fields["applicant"])
+		if containsWxid(policyBlacklist, firstRawString(applicant, "wxid", "user_id")) {
+			return false
+		}
+	}
 	for _, key := range []string{"final_from_wxid", "sender", "sender_wxid", "sender_id", "from_wxid", "wxid"} {
 		sender := eventString(fields[key])
 		if sender != "" && containsWxid(policyBlacklist, sender) {

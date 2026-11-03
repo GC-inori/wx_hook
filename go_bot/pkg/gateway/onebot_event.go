@@ -75,7 +75,15 @@ func formatOneBotEvent(event client.Event, selfID string) map[string]any {
 		base["request_type"] = "friend"
 		base["user_id"] = userID
 		base["comment"] = firstRawString(applicant, "content")
-		base["flag"] = firstRawString(applicant, "ticket")
+		base["sub_type"] = "add"
+		base["flag"] = firstRawString(applicant, "ticket", "flag")
+		if base["flag"] == "" {
+			base["flag"] = firstRawString(fields, "flag", "ticket")
+		}
+	case "friendAdded":
+		base["post_type"] = "notice"
+		base["notice_type"] = "friend_add"
+		base["user_id"] = firstRawString(fields, "wxid", "user_id")
 	case "groupMemberChanges":
 		groupID := firstRawString(fields, "group_wxid", "group_id", "from_wxid")
 		noticeType := "group_increase"

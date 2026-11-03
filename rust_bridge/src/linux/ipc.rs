@@ -432,6 +432,20 @@ fn process_request(request: IpcRequest) -> IpcResponse {
             }
             Err(error) => make_response(id, 1, &error, None),
         },
+        "agree_friend_req" | "agreeFriendReq" => match parse_agree_friend_req(request.data.as_ref()) {
+            Ok((wxid, ticket, encryptusername, scene, remark)) => {
+                match super::sender::agree_friend_req(&wxid, &ticket, &encryptusername, scene, &remark) {
+                    Ok(()) => make_response(
+                        id,
+                        0,
+                        "",
+                        Some(json!({ "agreed": true, "wxid": wxid })),
+                    ),
+                    Err(error) => make_response(id, 1, &error, None),
+                }
+            }
+            Err(error) => make_response(id, 1, &error, None),
+        },
         "revoke_my_msg"
         | "revokeMyMsg"
         | "revoke_msg"
@@ -461,8 +475,6 @@ fn process_request(request: IpcRequest) -> IpcResponse {
         | "quitGroup"
         | "edit_self_member_nick"
         | "editSelfMemberNick"
-        | "agree_friend_req"
-        | "agreeFriendReq"
         | "del_friend"
         | "delFriend"
         | "edit_obj_remark"
@@ -501,6 +513,57 @@ fn process_request(request: IpcRequest) -> IpcResponse {
         ),
         other => make_response(id, 4, &format!("unknown action: {other}"), None),
     }
+}
+
+fn parse_agree_friend_req(
+    data: Option<&Value>,
+) -> Result<(String, String, String, u32, String), String> {
+    let data = data.ok_or_else(|| "data is required".to_owned())?;
+    let wxid = data
+        .get("wxid")
+        .or_else(|| data.get("user_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if wxid.is_empty() {
+        return Err("data.wxid / data.user_id is required".to_owned());
+    }
+    let ticket = data
+        .get("ticket")
+        .or_else(|| data.get("flag"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if ticket.is_empty() {
+        return Err("data.ticket / data.flag is required".to_owned());
+    }
+    let encryptusername = data
+        .get("encryptusername")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let scene = match data.get("scene") {
+        None | Some(Value::Null) => 6,
+        Some(Value::Number(value)) => value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| "data.scene must be a non-negative 32-bit integer".to_owned())?,
+        Some(Value::String(value)) if value.trim().is_empty() => 6,
+        Some(Value::String(value)) => value
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| "data.scene must be a non-negative 32-bit integer".to_owned())?,
+        Some(_) => return Err("data.scene must be a non-negative 32-bit integer".to_owned()),
+    };
+    let remark = data
+        .get("remark")
+        .or_else(|| data.get("content"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    Ok((wxid, ticket, encryptusername, scene, remark))
 }
 
 fn parse_at_list(data: &Value) -> Result<Option<String>, String> {

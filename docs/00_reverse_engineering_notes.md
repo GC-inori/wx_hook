@@ -34,6 +34,11 @@
 | **`RVA_SCHEDULE_FUNC`** | `0x30F9F0` | 任务推入执行函数 | 将发送 Action 提交到底层线程池 |
 | **`RVA_ALLOCATE`** | `0x754C41C` | 微信内部内存分配器 (`malloc` 封装) | 用于构造底层 C++ 字符串与对象 |
 | **`RVA_FREE`** | `0x754C458` | 微信内部内存释放器 (`free` 封装) | 释放堆上构建的临时消息载荷 |
+| **`RVA_VERIFY_USER`** | `0x6921760` | 构造 `micromsg.VerifyUserRequest` 并提交 CGI 137 (`/cgi-bin/micromsg-bin/verifyuser`) | `opcode=2` 同意好友申请；调用在微信主线程执行 |
+
+### 好友申请同意函数（VerifyUser）
+
+`sub_6921760` 位于 RVA `0x6921760`，负责构造 `micromsg.VerifyUserRequest` 并请求 CGI 137 (`/cgi-bin/micromsg-bin/verifyuser`)。System V AMD64 ABI 参数依次为：`result_buf`, `context`, `wxid`, `opcode`, `scene`, `scan_qrcode`, `ticket`, `content`, `encryptusername`；`opcode=2` 表示同意好友申请。调用需在微信主线程执行，桥接层用 `g_idle_add` 调度，使用完毕后释放四个 `std::string` 参数。
 
 ### 账户与联系人缓存虚表（Account & Contact Cache RVAs）
 
