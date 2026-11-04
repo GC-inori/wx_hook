@@ -284,7 +284,12 @@
                 </div>
               </div>
 
-              <!-- Tab 2: 扫码登录 -->
+              <!-- Tab 2: 微信网页版工作台 (经典微信双栏会话与群聊面板) -->
+              <div v-else-if="activeTab === 'chat'" key="chat">
+                <WeChatChatPanel />
+              </div>
+
+              <!-- Tab 3: 扫码登录 -->
               <div v-else-if="activeTab === 'login'" key="login" class="space-y-6">
                 <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
                   <!-- 扫码主卡片 -->
@@ -720,6 +725,7 @@ import SystemStatusDisplay from './components/SystemStatusDisplay.vue'
 import NetworkItemDisplay from './components/NetworkItemDisplay.vue'
 import NetworkManager from './components/NetworkManager.vue'
 import SystemConfigManager from './components/SystemConfigManager.vue'
+import WeChatChatPanel from './components/WeChatChatPanel.vue'
 import { toast, dialog } from './utils/dialog'
 import { themeState, setThemeMode, toggleThemeMode } from './utils/theme'
 import { i18nState, toggleLocale, t } from './utils/i18n'
@@ -727,6 +733,9 @@ import { i18nState, toggleLocale, t } from './utils/i18n'
 // 纯 SVG 图标定义
 const IconDashboard = () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24', strokeWidth: 2 }, [
   h('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' })
+])
+const IconChat = () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24', strokeWidth: 2 }, [
+  h('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z' })
 ])
 const IconLogin = () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24', strokeWidth: 2 }, [
   h('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z' })
@@ -785,6 +794,7 @@ const handleToggleLocale = () => {
 
 const navItems = computed(() => [
   { id: 'dashboard', name: t('nav.dashboard'), icon: IconDashboard },
+  { id: 'chat', name: t('nav.chat'), icon: IconChat },
   { id: 'login', name: t('nav.login'), icon: IconLogin },
   { id: 'network', name: t('nav.network'), icon: IconNetwork },
   { id: 'logs', name: t('nav.logs'), icon: IconLogs },
@@ -1200,6 +1210,10 @@ const connectWS = () => {
         wxid.value = msg.data.wxid || ''
         return
       }
+      // 广播 OneBot 事件供全局组件消费 (如微信聊天面板)
+      const eventDetail = msg.post_type ? msg : (msg.data && msg.data.post_type ? msg.data : msg)
+      window.dispatchEvent(new CustomEvent('wx_onebot_event', { detail: eventDetail }))
+
       recvCount.value++
       recentEvents.value.unshift({
         type: msg.type || msg.event || 'message',
