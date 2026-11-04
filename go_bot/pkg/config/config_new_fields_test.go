@@ -53,8 +53,8 @@ func assertNewDefaults(t *testing.T, cfg *Config) {
 	if cfg.Launcher.BridgeWaitTimeout != 30 || cfg.Launcher.XvfbWaitTimeout != 5 {
 		t.Errorf("launcher defaults = %+v", cfg.Launcher)
 	}
-	if !cfg.Policy.AtSender || len(cfg.Policy.BlacklistWxids) != 0 || len(cfg.Policy.WhitelistGroups) != 0 {
-		t.Errorf("policy defaults = %+v", cfg.Policy)
+	if !cfg.Policy.RateLimitEnabled {
+		t.Errorf("pacing defaults = %+v", cfg.Policy)
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("default configuration did not validate: %v", err)
@@ -80,11 +80,8 @@ launcher:
   bridge_wait_timeout: 45
   xvfb_wait_timeout: 2
 policy:
-  at_sender: false
-  blacklist_wxids: [wxid_blocked]
-  whitelist_groups: [room_allowed@chatroom]
-  friend_welcome_enabled: true
-  friend_welcome_message: "Welcome!"
+  media_dir: data/media
+  rate_limit_enabled: false
 `)
 	if err := os.WriteFile(filepath.Join(root, "config.yaml"), contents, 0600); err != nil {
 		t.Fatal(err)
@@ -102,8 +99,8 @@ policy:
 	if cfg.Launcher.BridgeWaitTimeout != 45 || cfg.Launcher.XvfbWaitTimeout != 2 {
 		t.Fatalf("custom launcher wait options were not loaded: %+v", cfg.Launcher)
 	}
-	if cfg.Policy.AtSender || len(cfg.Policy.BlacklistWxids) != 1 || cfg.Policy.BlacklistWxids[0] != "wxid_blocked" || len(cfg.Policy.WhitelistGroups) != 1 || cfg.Policy.WhitelistGroups[0] != "room_allowed@chatroom" || !cfg.Policy.FriendWelcomeEnabled || cfg.Policy.FriendWelcomeMessage != "Welcome!" {
-		t.Fatalf("custom policy options were not loaded: %+v", cfg.Policy)
+	if cfg.Policy.MediaDir != "data/media" || cfg.Policy.RateLimitEnabled {
+		t.Fatalf("custom pacing options were not loaded: %+v", cfg.Policy)
 	}
 }
 

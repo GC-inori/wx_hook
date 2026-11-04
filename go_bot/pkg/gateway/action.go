@@ -13,7 +13,7 @@ import (
 )
 
 // DispatchAction is the shared action pipeline for HTTP and WebSocket ingress.
-// It validates and canonicalizes the action, enforces policy and pacing,
+// It validates and canonicalizes the action, applies outbound pacing,
 // resolves remote media, then invokes the current native bridge caller.
 func (s *Server) DispatchAction(ctx context.Context, actionType string, rawData json.RawMessage) (code int, key string, result any, err error) {
 	if strings.TrimSpace(actionType) == "" {
@@ -31,8 +31,16 @@ func (s *Server) DispatchAction(ctx context.Context, actionType string, rawData 
 		return 400, "errors.invalid_param", map[string]any{}, errors.New("action data must be a valid JSON object")
 	}
 
-	if blocked := s.configuredDestinationBlocked(canonical, rawData); blocked != "" {
-		return 403, "errors.unauthorized", map[string]any{"detail": fmt.Sprintf("sending to blacklisted wxid %q is blocked", blocked)}, fmt.Errorf("destination wxid %q is blacklisted", blocked)
+	if canonical == "delFriend" {
+		var params map[string]json.RawMessage
+		if json.Unmarshal(rawData, &params) == nil && params != nil && rawParamString(params, "wxid") == "" {
+			if userID := rawParamString(params, "user_id"); userID != "" {
+				params["wxid"], _ = json.Marshal(userID)
+				if normalized, err := json.Marshal(params); err == nil {
+					rawData = normalized
+				}
+			}
+		}
 	}
 
 	caller := s.currentCaller()

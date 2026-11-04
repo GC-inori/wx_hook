@@ -1,6 +1,6 @@
+use crate::offsets::{RVA_ALLOCATE, RVA_APP_FUNC, RVA_FREE, RVA_SCHEDULER_FUNC, RVA_SCHEDULE_FUNC};
 use std::ffi::c_void;
 use std::sync::atomic::AtomicI32;
-use crate::offsets::{RVA_ALLOCATE, RVA_FREE, RVA_APP_FUNC, RVA_SCHEDULER_FUNC, RVA_SCHEDULE_FUNC};
 
 #[repr(C)]
 pub struct SmallString {

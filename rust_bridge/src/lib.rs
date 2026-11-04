@@ -1,3 +1,7 @@
+#[cfg(all(windows, test))]
+#[path = "linux/events.rs"]
+mod linux_event_tests;
+
 #[cfg(windows)]
 pub mod account;
 #[cfg(windows)]

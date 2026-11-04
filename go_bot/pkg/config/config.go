@@ -52,29 +52,18 @@ type EndpointConfig struct {
 }
 
 type PolicyConfig struct {
-	AtSender             bool     `json:"at_sender" yaml:"at_sender"`
-	BlacklistWxids       []string `json:"blacklist_wxids" yaml:"blacklist_wxids"`
-	WhitelistGroups      []string `json:"whitelist_groups" yaml:"whitelist_groups"`
-	AntiRevoke           bool     `json:"anti_revoke" yaml:"anti_revoke"`
-	AutoAgreeFriend      bool     `json:"auto_agree_friend" yaml:"auto_agree_friend"`
-	FriendWelcomeEnabled bool     `json:"friend_welcome_enabled" yaml:"friend_welcome_enabled"`
-	FriendWelcomeMessage string   `json:"friend_welcome_message" yaml:"friend_welcome_message"`
-	AutoAgreeGroup       bool     `json:"auto_agree_group" yaml:"auto_agree_group"`
-	FilterGh             bool     `json:"filter_gh" yaml:"filter_gh"`
-	MediaDir             string   `json:"media_dir" yaml:"media_dir"`
-	RetryCount           int      `json:"retry_count" yaml:"retry_count"`
-	RateLimitEnabled     bool     `json:"rate_limit_enabled" yaml:"rate_limit_enabled"`
-	MaxMessagesPerSec    int      `json:"max_messages_per_sec" yaml:"max_messages_per_sec"`
-	TargetMinIntervalMs  int      `json:"target_min_interval_ms" yaml:"target_min_interval_ms"`
-	JitterMinMs          int      `json:"jitter_min_ms" yaml:"jitter_min_ms"`
-	JitterMaxMs          int      `json:"jitter_max_ms" yaml:"jitter_max_ms"`
-	AntiLoopWindowSec    int      `json:"anti_loop_window_sec" yaml:"anti_loop_window_sec"`
+	MediaDir            string `json:"media_dir" yaml:"media_dir"`
+	RateLimitEnabled    bool   `json:"rate_limit_enabled" yaml:"rate_limit_enabled"`
+	MaxMessagesPerSec   int    `json:"max_messages_per_sec" yaml:"max_messages_per_sec"`
+	TargetMinIntervalMs int    `json:"target_min_interval_ms" yaml:"target_min_interval_ms"`
+	JitterMinMs         int    `json:"jitter_min_ms" yaml:"jitter_min_ms"`
+	JitterMaxMs         int    `json:"jitter_max_ms" yaml:"jitter_max_ms"`
+	AntiLoopWindowSec   int    `json:"anti_loop_window_sec" yaml:"anti_loop_window_sec"`
 }
 
-// DefaultPolicyConfig returns the behavioral limits used for new installations.
+// DefaultPolicyConfig returns the gateway's outbound pacing defaults.
 func DefaultPolicyConfig() PolicyConfig {
 	return PolicyConfig{
-		AtSender:            true,
 		RateLimitEnabled:    true,
 		MaxMessagesPerSec:   5,
 		TargetMinIntervalMs: 600,

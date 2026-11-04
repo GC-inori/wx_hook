@@ -69,7 +69,10 @@ static INIT_ARRAY: unsafe extern "C" fn() = {
         if !exe_str.ends_with("/wechat") && exe_str != "wechat" {
             return;
         }
-        bridge_info!("Linux preload bridge mapped into host PID: {}", libc::getpid());
+        bridge_info!(
+            "Linux preload bridge mapped into host PID: {}",
+            libc::getpid()
+        );
         ipc::start_unix_server();
         msg_hook::start_hook();
     }
@@ -240,7 +243,12 @@ pub unsafe extern "C" fn SetMMMojoEnvironmentCallbacks(
     arg: *mut c_void,
 ) {
     g_environment.store(environment, Ordering::Release);
-    bridge_info!("SetMMMojoEnvironmentCallbacks called: env={:p}, type={}, arg={:p}", environment, callback_type, arg);
+    bridge_info!(
+        "SetMMMojoEnvironmentCallbacks called: env={:p}, type={}, arg={:p}",
+        environment,
+        callback_type,
+        arg
+    );
     ipc::start_unix_server();
 
     let Some(real_set_callbacks) = set_callbacks_fn() else {
@@ -368,7 +376,11 @@ pub unsafe extern "C" fn SendMMMojoWriteInfo(
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         emit_write_event(metadata);
     }));
-    bridge_info!("SendMMMojoWriteInfo: env={:p}, write_info={:p}", environment, write_info);
+    bridge_info!(
+        "SendMMMojoWriteInfo: env={:p}, write_info={:p}",
+        environment,
+        write_info
+    );
     match send_write_info_fn() {
         Some(real) => real(environment, write_info),
         None => false,

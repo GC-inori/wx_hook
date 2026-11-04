@@ -35,10 +35,24 @@
 | **`RVA_ALLOCATE`** | `0x754C41C` | 微信内部内存分配器 (`malloc` 封装) | 用于构造底层 C++ 字符串与对象 |
 | **`RVA_FREE`** | `0x754C458` | 微信内部内存释放器 (`free` 封装) | 释放堆上构建的临时消息载荷 |
 | **`RVA_VERIFY_USER`** | `0x6921760` | 构造 `micromsg.VerifyUserRequest` 并提交 CGI 137 (`/cgi-bin/micromsg-bin/verifyuser`) | `opcode=2` 同意好友申请；调用在微信主线程执行 |
+| **`RVA_HONGBAO_REQ_INIT` / `RVA_HONGBAO_REQ_FREE`** | `0x7CC1BD0` / `0x7CC1DA0` | `micromsg.HongBaoReq` 构造与析构 | 请求类型 3/4 分别用于 receive/open |
+| **`RVA_SK_BUFFER_INIT`** | `0x7BA6400` | 初始化 32 字节 `SKBuiltinBuffer_t` | Query `StdString*` 位于对象 `+8` |
+| **`RVA_CO_CGI_SEND_COMMON_REQUEST`** | `0x727ED70` | 通用 CGI 请求发送函数 | CGI 1581 (`receivewxhb`) 与 1685 (`openwxhb`) |
+| **`RVA_HONGBAO_RES_FREE`** | `0x7CC2700` | `micromsg.HongBaoRes` 析构函数 | 清理 CGI 返回对象 |
+| **`RVA_GLOBAL_APP_CONTEXT`** | `0xACF6710` | 全局 App Context 指针存储地址 | `*(context vtable + 24)` 获取网络服务实例 |
 
 ### 好友申请同意函数（VerifyUser）
 
 `sub_6921760` 位于 RVA `0x6921760`，负责构造 `micromsg.VerifyUserRequest` 并请求 CGI 137 (`/cgi-bin/micromsg-bin/verifyuser`)。System V AMD64 ABI 参数依次为：`result_buf`, `context`, `wxid`, `opcode`, `scene`, `scan_qrcode`, `ticket`, `content`, `encryptusername`；`opcode=2` 表示同意好友申请。调用需在微信主线程执行，桥接层用 `g_idle_add` 调度，使用完毕后释放四个 `std::string` 参数。
+
+### 红包 CGI 两阶段调用（HongBaoReq）
+
+红包请求和响应均使用 Linux 微信 4.1.15.55 的 `HongBaoReq`、`SKBuiltinBuffer_t` 与 `HongBaoRes` 对象。请求对象大小至少 48 字节；`+16` 为请求类型（3=receive、4=open），`+20` 为 1，`+24` 指向 32 字节缓冲对象，`+36` 为 `0xE`。缓冲对象 `+8` 指向堆上的 `StdString` Query，`+16` 为 Query 字节长度，`+24` 为标志 3。对象经各自构造/析构函数管理。
+
+`RVA_GLOBAL_APP_CONTEXT` 处的全局指针指向 App Context；调用其虚表 `+24` 处函数可取得网络服务。`CoCgiSendCommonRequest` 使用 System V AMD64 ABI，参数顺序为 `res_buf`, `net_svc`, `req_buf`, `cgi_id`, `cgi_url`, `empty_str`, `options`；返回对象中的 `res_buf + 16` 指向缓冲，缓冲 `+8` 指向 `StdString` JSON 响应。
+
+- 第一步：CGI 1581，URL `/cgi-bin/mmpay-bin/receivewxhb`，请求类型 3；Query 顺序为 `agreeDuty=0&channelId=...&inWay=...&nativeUrl=...&sendId=...&sessionUserName=...&union_source=0`。群聊 `inWay=0`，私聊 `inWay=1`；响应中的 `hbStatus=0` 与 `timingIdentifier` 用于判断并发起下一步。
+- 第二步：CGI 1685，URL `/cgi-bin/mmpay-bin/openwxhb`，请求类型 4；Query 顺序为 `channelId=...&nativeUrl=...&nickName=...&sessionUserName=...&timingIdentifier=...&union_source=0`。响应 JSON 包含到账金额（分）、`receiveId` 等字段。
 
 ### 账户与联系人缓存虚表（Account & Contact Cache RVAs）
 
@@ -52,6 +66,75 @@
 | **`RVA_CACHE_PROVIDER_GETTER`** | `0x382440` | 联系人缓存提供者 (Cache Provider) 获取函数 |
 | **`RVA_CACHE_PROVIDER_VTABLE`** | `0x8FD19A8` | 缓存提供者虚表地址 |
 | **`RVA_CONTACT_CACHE_VTABLE`** | `0x916B1F8` | 联系人缓存虚表地址 |
+| **`RVA_APP_CONTEXT_GETTER_SHARED`** | `0x60421E0` | 通过共享指针获取 App Context |
+| **`RVA_CONTACT_PROVIDER_GETTER`** | `0x619CE90` | 根据 App Context 获取联系人 Provider 共享指针 |
+| **`RVA_CONTACT_SERVICE_GETTER`** | `0x6111260` | 根据 Provider 获取联系人 Service 共享指针 |
+| **`RVA_DELETE_CONTACT`** | `0x786F830` | 使用联系人 Service 与 wxid 删除联系人 |
+| **`RVA_CHATROOM_SERVICE_GETTER`** | `0x6095540` | 根据 Provider 获取群聊 Service 共享指针 (`sub_6095540(&shared_ptr, provider)`) |
+| **`RVA_OPLOG_SERVICE_GETTER`** | `0x61AE4B0` | 根据 Provider 获取 Oplog Service 共享指针 (`sub_61AE4B0(&shared_ptr, provider)`) |
+| **`RVA_CREATE_CHATROOM`** | `0x78C0310` | 拉人建群核心接口 (`sub_78C0310(&res_id, chatroom_svc, &members_vec, &topic)`) |
+| **`RVA_ADD_CHATROOM_MEMBER`** | `0x78BE100` | 群内拉人/邀请核心接口 (`sub_78BE100(chatroom_svc, &members_vec, &room_id, empty_proto, &res)`) |
+| **`RVA_DEL_CHATROOM_MEMBER`** | `0x78C49E0` | 移出群成员核心接口 (`sub_78C49E0(&res_buf, chatroom_svc, &members_vec, &room_id, scene)`) |
+| **`RVA_QUIT_CHATROOM`** | `0x78FB8C0` | 主动退出微信群 (`sub_78FB8C0(oplog_svc, &room_id)`)，提交 Oplog 16 |
+| **`RVA_MOD_CHATROOM_MEMBER_NICK`** | `0x78FBCA0` | 修改自己在群内的群昵称 (`sub_78FBCA0(oplog_svc, &room_id, &self_wxid, &nick)`)，提交 Oplog 48 |
+| **`RVA_EDIT_OBJ_REMARK`** | `0x76BF030` | 修改好友备注 (`sub_76BF030(&edit_obj)`)，提交 Oplog 2 (`ModContact`) |
+| **`RVA_VTABLE_EDIT_REMARK`** | `0xA966508` | `EditRemarkObj` 结构体虚表指针 |
+| **`RVA_REVOKE_MSG_SEND_CGI`** | `0x6AD8DC0` | 消息撤回通用网络发送函数 (`sub_6AD8DC0`) |
+| **`RVA_REVOKE_MSG_REQUEST_INIT`** | `0x7CF78E0` | `micromsg.RevokeMsgRequest` 结构体构造函数 |
+| **`RVA_REVOKE_MSG_REQUEST_FREE`** | `0x7CF7C00` | `micromsg.RevokeMsgRequest` 结构体析构函数 |
+| **`RVA_GET_CHATROOM_INFO`** | `0x65A10B0` | 获取群聊元数据结构体 `ChatRoomInfo` 共享指针 (`sub_65A10B0(&shared_ptr, chatroom_svc, &room_id)`) |
+| **`RVA_CONTACT_STORAGE_GETTER`** | `0x6383FB0` | 获取联系人与群聊本地存储服务共享指针 (`sub_6383FB0(&shared_ptr, prov)`) |
+| **`RVA_GET_ALL_ROOM_CONTACTS`** | `0x65B3570` | 枚举本地存储中所有已加入群与联系人条目 (`sub_65B3570(&map, storage_svc)`) |
+| **`RVA_GET_CONTACT_BY_WXID`** | `0x786E260` | 从联系人缓存中按 wxid 检索单个联系人对象 (`sub_786E260(&shared_ptr, contact_svc, &wxid)`) |
+
+### 好友删除调用（delFriend）
+
+Linux 微信 `4.1.15.55` 的联系人删除流程依次调用 `sub_60421E0(&app_ctx)`、`sub_619CE90(&provider, app_ctx)`、`sub_6111260(&service, provider)`，最后以 `sub_786F830(service_raw_ptr, &wxid_std_string)` 发起删除。三个 getter 按 System V AMD64 ABI 接收两字共享指针输出对象；删除操作需在微信主线程执行，桥接层通过 `g_idle_add` 调度。完成后释放 `StdString`，并递减每个共享指针控制块位于 `+8` 的引用计数；计数归零时调用控制块虚表 `+16` 的销毁函数。
+
+### 群管理与关系链接口（Chatroom & Oplog APIs）
+
+1. **拉人建群 (`createGroup`)**:
+   - 调用流程：获取 `ChatroomService` (`0x6095540`)，构造 `std::vector<StdString>` 包含初始成员 wxid，构造 `StdString` 群主题，调用 `sub_78C0310(&res_wxid, chatroom_svc, &members_vec, &topic)`；
+   - 返回：新群的真实 ID（如 `xxx@chatroom`）。
+
+2. **拉好友进群 / 邀请进群 (`addMembers` / `inviteMembers`)**:
+   - 调用流程：获取 `ChatroomService` (`0x6095540`)，构造 `std::vector<StdString>` 成员列表与 `StdString` 群 ID，调用 `sub_78BE100(chatroom_svc, &members_vec, &room_id, null, &res)`。
+
+3. **移出群成员 (`delMembers`)**:
+   - 调用流程：获取 `ChatroomService` (`0x6095540`)，构造 `std::vector<StdString>` 待踢成员列表与 `StdString` 群 ID，调用 `sub_78C49E0(&res_buf, chatroom_svc, &members_vec, &room_id, 0)`。
+
+4. **主动退群 (`quitGroup`)**:
+   - 调用流程：获取 `OplogService` (`0x61AE4B0`)，构造 `StdString` 群 ID，调用 `sub_78FB8C0(oplog_svc, &room_id)`；
+   - 内部机制：微信内部构造 `micromsg.QuitChatRoom` Protobuf，填充 `UserName` 与 `ChatRoomName`，提交 `Oplog 16` 并持久化退出状态。
+
+5. **修改群内个人昵称 (`editSelfMemberNick`)**:
+   - 调用流程：获取 `OplogService` (`0x61AE4B0`)，传入群 ID、自己的 wxid 与新昵称，调用 `sub_78FBCA0(oplog_svc, &room_id, &self_wxid, &new_nick)`；
+   - 内部机制：提交 `Oplog 48` (`micromsg.ModChatRoomMemberDisplayName`)。
+
+6. **修改好友备注 (`editObjRemark`)**:
+   - 调用流程：构造 64 字节结构体 `EditRemarkObj`（`+0` 为虚表 `0xA966508`，`+8` 为 `wxid`，`+32` 为 `remark`，`+56` 为 0），调用 `sub_76BF030(&obj)`；
+   - 内部机制：自动查询联系人缓存，更新备注字段并写本地 SQLite 库，同时提交 `Oplog 2` (`ModContact`) 到服务器完成双向同步。
+
+### 消息撤回与枚举接口（Revoke & Enumeration APIs）
+
+1. **消息撤回 (`revokeMyMsg`)**:
+   - 核心调用点：`sub_6AD8DC0` (`RVA_REVOKE_MSG_SEND_CGI = 0x6AD8DC0`)；
+   - 载荷结构：`micromsg.RevokeMsgRequest`，使用 `sub_7CF78E0` 初始化；
+   - 结构体偏移：`+16` 为 `client_msg_id` (`StdString`)，`+24` 为 `create_time` (`u32`)，`+32` 为 `from_user` (`StdString`)，`+48` 为 `to_user` (`StdString`)，`+56` 为 `svr_msg_id` (`u64`)；
+   - 发送调用：通过全局网络服务发起 CGI 536 (`/cgi-bin/micromsg-bin/revokemsg`) 请求；执行后调用 `sub_7CF7C00` 析构请求对象并释放 `StdString`。
+
+2. **群成员列表获取 (`getMemberList`)**:
+   - 核心函数：`sub_65A10B0` (`RVA_GET_CHATROOM_INFO = 0x65A10B0`)；
+   - 调用流程：获取 `ChatroomService` (`0x6095540`)，传入目标群号 `xxx@chatroom` 调用 `sub_65A10B0(&mut chatroom_info, chatroom_svc, &room_id)`；
+   - 数据解析：返回的 `ChatRoomInfo` 对象中，偏移 `+8` 为群 ID，`+32` 为群主 wxid，`+88` 为群名称，`+136` 处直接存储完整的全群成员列表字符串（以 `^` 分隔），`+184` 为群公告；
+   - 成员信息补齐：遍历拆分各成员 wxid 后，调用 `sub_786E260` (`RVA_GET_CONTACT_BY_WXID = 0x786E260`) 查联系人缓存，直接从内存中回填各群员昵称与备注。
+
+3. **已加入群列表与联系人枚举 (`getGroupList` / `getFriendList`)**:
+   - 核心函数：`sub_65B3570` (`RVA_GET_ALL_ROOM_CONTACTS = 0x65B3570`)；
+   - 调用流程：通过 `sub_6383FB0` (`RVA_CONTACT_STORAGE_GETTER = 0x6383FB0`) 获取存储服务指针，调用 `sub_65B3570(&mut map, storage_svc)` 枚举内存联系人表；
+   - 遍历方式：读取哈希桶链表首节点 `*(_QWORD **)(map + 16)`，沿 `*node` 指针遍历，`node + 16` 处为联系人/群聊唯一标识 `StdString`；以 `@chatroom` 结尾的归入群列表，其余常规 `wxid` 归入联系人列表。
+
+
 
 ---
 

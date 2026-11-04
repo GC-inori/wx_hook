@@ -1,9 +1,7 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -131,23 +129,6 @@ func sceneFromRaw(raw json.RawMessage, fallback uint32) uint32 {
 	return fallback
 }
 
-func (s *Server) autoAgreeFriend(request cachedFriendRequest) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.requestTimeout())
-	defer cancel()
-	_, _, _, err := s.DispatchAction(ctx, "agreeFriendReq", marshalParams(map[string]any{
-		"wxid":            request.Wxid,
-		"ticket":          request.Ticket,
-		"encryptusername": request.EncryptUsername,
-		"scene":           request.Scene,
-		"remark":          "",
-	}))
-	if err != nil {
-		log.Printf("automatically agree to friend request from %q: %v", request.Wxid, err)
-		return
-	}
-	s.publishFriendAdded(request.Wxid)
-}
-
 func friendAddedSystemMessage(event client.Event, selfID string) (string, bool) {
 	if event.Event != "systemMsg" && event.Event != "recvMsg" {
 		return "", false
@@ -193,21 +174,4 @@ func (s *Server) publishFriendAdded(wxid string) {
 
 	data, _ := json.Marshal(map[string]string{"wxid": wxid})
 	s.Publish(client.Event{Event: "friendAdded", Data: data})
-
-	cfg := s.currentConfig().Policy
-	message := cfg.FriendWelcomeMessage
-	if !cfg.FriendWelcomeEnabled || wxid == "" || strings.TrimSpace(message) == "" {
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), s.requestTimeout())
-		defer cancel()
-		_, _, _, err := s.DispatchAction(ctx, "sendText", marshalParams(map[string]string{
-			"target": wxid,
-			"text":   message,
-		}))
-		if err != nil {
-			log.Printf("send friend welcome message to %q: %v", wxid, err)
-		}
-	}()
 }

@@ -25,8 +25,12 @@
 | **`send_msg`** | `sendText` / `sendText2` / 富媒体 | 根据 `message_type` 自动判断分发给好友或微信群 |
 | **`send_group_msg`** | `sendText` / `sendText2` / `sendImage` | 发送微信群消息。若消息含 `at` 段，自动转为 `sendText2` 注入 `atuserlist` |
 | **`send_private_msg`** | `sendText` / `sendImage` / `sendFile` | 发送好友私聊文本或图片/文件 |
-| **`delete_msg`** | `revokeMyMsg` | 消息撤回。目前底层 Linux 原生撤回尚未打通，暂返回 501 |
+| **`delete_msg`** | `revoke_msg` | 将 OneBot `message_id` 还原为原生消息标识；优先从已收到的消息上下文补齐会话、客户端消息 ID、服务端消息 ID 与创建时间，再转发撤回请求。也接受显式 `to_user` / `group_id` / `user_id` 和撤回元数据 |
 | **`get_msg`** | `queryObj` | 查询历史消息详情（依赖本地 SQLite 缓存） |
+| **`delete_friend`** | `delFriend` | 根据 `user_id` 删除指定好友；`del_friend` 与 `delFriend` 也可调用 |
+| **`confirm_trans`** | `confirmTrans` | 按转账单号及微信要求的辅助字段提交确认 |
+| **`receive_hong_bao`** | `receiveHongBao` | 查询红包状态并获取拆领所需的 `timingIdentifier` |
+| **`open_hong_bao`** | `openHongBao` | 使用 `timingIdentifier` 提交红包领取请求 |
 
 ### 2. 账号与状态查询
 | OneBot 动作名 | 映射的底层调用 | 实现细节与降级策略 |
@@ -38,9 +42,9 @@
 ### 3. 列表枚举与群资料 (优雅降级设计)
 | OneBot 动作名 | 映射的底层调用 | 实现细节与降级策略 |
 | :--- | :--- | :--- |
-| **`get_group_list`** | `getGroupList` | 底层未就绪时**优雅降级返回空列表 `[]`**（retcode 0），避免客户端刷屏报错 |
-| **`get_friend_list`** | `getFriendList` | 底层未就绪时**优雅降级返回空列表 `[]`**（retcode 0） |
-| **`get_group_member_list`** | `getMemberList` | 底层未就绪时**优雅降级返回空列表 `[]`**（retcode 0） |
+| **`get_group_list`** | `getGroupList` | 将原生群列表转换为 OneBot `[{"group_id": 123, "group_name": "..."}]`；群 ID 映射为稳定数字 ID，底层失败时返回空列表 |
+| **`get_friend_list`** | `getFriendList` | 将原生好友列表转换为 OneBot `[{"user_id": 456, "nickname": "..."}]`；用户 ID 映射为稳定数字 ID，底层失败时返回空列表 |
+| **`get_group_member_list`** | `getMemberList` | 将原生成员对象展开为 OneBot 成员数组，映射群号与成员 ID，并将群主标记为 `role: "owner"`；底层失败时返回空列表 |
 | **`get_group_member_info`** | `getMemberNick` | 查询群成员昵称。微信群不区分管理员，默认固定返回 `role: "member"` |
 | **`get_group_root_files`** | - | 微信无 QQ 群文件系统，返回 `files: [], folders: []`，客户端安全降级 |
 | **`get_group_files_by_folder`** | - | 同上，安全返回空列表 |
@@ -49,11 +53,17 @@
 ### 4. 群管与好友请求
 | OneBot 动作名 | 映射的底层调用 | 说明 |
 | :--- | :--- | :--- |
-| **`set_group_kick`** | `delMembers` | 移出群成员（依赖底层实现状态） |
-| **`set_group_leave`** | `quitGroup` | 退出指定微信群 |
-| **`set_friend_add_request`**| `agreeFriendReq` | 根据 `flag` 查找缓存中的 wxid、ticket、encryptusername 与 scene 后同意好友申请；拒绝操作由底层桥接层暂不支持 |
+| **`set_group_kick`** | `delMembers` | 将 OneBot `group_id` 和 `user_id` 转为群标识与单成员列表，移出指定成员 |
+| **`set_group_leave`** | `quitGroup` | 将 `group_id` 转为 `chatroom_name` 并提交主动退群请求 |
+| **`set_group_card`** | `editSelfMemberNick` | 使用 `group_id` 和 `card`（或 `nickname`）修改当前账号的群内昵称 |
+| **`set_friend_remark`** | `editObjRemark` | 将 `user_id` 与 `remark` 转为微信好友备注原子调用 |
+| **`set_friend_add_request`** | `agreeFriendReq`；备注形态转 `editObjRemark` | 带 `flag` 时沿用好友申请同意流程；仅带 `wxid`/`user_id` 与 `remark` 时作为备注兼容别名 |
 
-收到 `friendReq` 时，网关会按 ticket/flag 缓存申请信息；`policy.auto_agree_friend: true` 可启用自动同意。`policy.friend_welcome_enabled` 与 `policy.friend_welcome_message` 控制好友添加成功后的欢迎语。好友添加成功时，网关会发送 OneBot 11 `notice_type: "friend_add"` 通知。
+收到 `friendReq` 时，网关按 ticket/flag 缓存申请信息并上报 OneBot `request.friend` 事件。网关不自动审核或发送欢迎消息；由外部客户端通过带 `flag` 的 `set_friend_add_request` 决定是否调用 `agreeFriendReq`。拒绝操作由底层桥接层暂不支持。好友添加成功时，网关会发送 OneBot 11 `notice_type: "friend_add"` 通知。
+
+收到 `transPay` 时，网关通过 OneBot notice 透传 `transfer_id`、`invalid_time`、`transfer_attach` 和金额等字段；需要确认时，由外部客户端调用 `confirm_trans`，网关不会自动确认收款。
+
+收到 `hongBao` 时，网关发送 `notice_type: "wx_red_packet"`，包含祝福语、红包发送 ID、原始 `native_url`、用户与群 ID。客户端可根据事件自行调用 `receive_hong_bao` 查询状态，再按需要调用 `open_hong_bao`；网关不会自动延时拆领或生成“已领取”事件。
 
 ### 5. 微信专属扩展动作
 | 扩展动作名 | 说明 |
@@ -62,6 +72,8 @@
 | **`send_card`** | 发送个人/公众号推荐名片卡片 |
 | **`send_applet`** | 发送微信小程序卡片 |
 | **`set_read_status`** | 设置指定会话为已读状态 |
+| **`create_group`** | 扩展动作；将 `user_list`/`member_list`/`users` 及 `topic`/`name` 转发至 `createGroup`，成功返回新群 ID |
+| **`add_members`** | 扩展动作；将 `group_id` 与 `user_list`/`member_list` 转发至 `addMembers` |
 
 ---
 
@@ -69,7 +81,7 @@
 
 微信原生体系采用字符串（`wxid_xxx`、`xxx@chatroom`），而 NapCat/QQ 机器人客户端强依赖 `int64` / `int32` 数字。网关内置了 `IDMapper` 映射器：
 
-1. **开关控制**：在 `config.yaml` 中配置 `gateway.qq_compat: true` 启用。
+1. **全链路映射**：群列表、好友列表和群成员列表按 OneBot 11 返回数字 ID；`delete_msg` 与 `get_group_member_list` 的输入 ID 始终支持反向解析。配置 `gateway.qq_compat: true` 时，事件与其它动作的用户、群组和消息 ID 也执行数字化转换。
 2. **分配区间**：
    - 用户 ID (`user_id` / `qq`)：从 **`100000001`** 起始递增分配（`int64`）。
    - 群组 ID (`group_id`)：从 **`200000001`** 起始递增分配（`int64`）。
@@ -79,7 +91,7 @@
    - 重启后自动载入原有双向映射表，保证相同的微信号与群号永远映射至唯一且固定的数字 ID。
 4. **全链路自动换算**：
    - 事件出站时：自动将 `user_id`、`group_id`、`message_id`、`[CQ:at,qq=...]` 及消息段 `data.qq` 换算为数字；
-   - 动作入站时：自动将数字 ID 逆向解析回微信原生的 `wxid_xxx` 与 `xxx@chatroom` 再交由微信底座发送。
+   - 动作入站时：自动将数字 ID 逆向解析回微信原生的 `wxid_xxx` 与 `xxx@chatroom` 再交由微信底座发送；成员数组 `user_list`、`member_list`、`users` 与群标识字段 `chatroom_name` 同样参与双向转换。
 
 ---
 

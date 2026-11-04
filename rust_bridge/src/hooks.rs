@@ -1,13 +1,11 @@
+use serde::Serialize;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use serde::Serialize;
 
-use crate::minhook;
-use crate::offsets::{
-    RVA_RECEIVE_HOOK, RVA_MENTION_FACTORY, RVA_VTABLE_MESSAGE, RVA_BUILDER,
-};
-use crate::wechat_abi::{SmallString, TextRequest, SharedMessage, TextCompletion, schedule_task};
 use crate::ipc::broadcast_event;
+use crate::minhook;
+use crate::offsets::{RVA_BUILDER, RVA_MENTION_FACTORY, RVA_RECEIVE_HOOK, RVA_VTABLE_MESSAGE};
+use crate::wechat_abi::{schedule_task, SharedMessage, SmallString, TextCompletion, TextRequest};
 
 #[derive(Serialize, Clone, Debug)]
 pub struct ReceivedMessageEvent {
@@ -169,7 +167,8 @@ pub fn install_hooks(core_base: usize) -> bool {
             recv_target,
             hooked_receive as *mut c_void,
             &mut original_recv_ptr,
-        ) == minhook::MhStatus::Ok {
+        ) == minhook::MhStatus::Ok
+        {
             ORIGINAL_RECEIVE = Some(std::mem::transmute(original_recv_ptr));
             minhook::enable_hook(recv_target);
         } else {
@@ -183,7 +182,8 @@ pub fn install_hooks(core_base: usize) -> bool {
             factory_target,
             hooked_mention_factory as *mut c_void,
             &mut original_factory_ptr,
-        ) == minhook::MhStatus::Ok {
+        ) == minhook::MhStatus::Ok
+        {
             ORIGINAL_FACTORY = Some(std::mem::transmute(original_factory_ptr));
             minhook::enable_hook(factory_target);
         } else {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,15 +128,154 @@ func (s *Server) limitedOneBotActionResponse(ctx context.Context, action string,
 
 func (s *Server) oneBotActionResponse(ctx context.Context, action string, params, echo json.RawMessage) protocol.Response {
 	result := s.dispatchOneBotAction(ctx, action, params)
-	data := result.data
-	if cfg := s.currentGatewayConfig(); cfg.QQCompat && s.idMapper != nil {
+	data := s.formatOneBotListResponse(action, result.data)
+	if cfg := s.currentGatewayConfig(); cfg.QQCompat && s.idMapper != nil && action != "get_group_list" && action != "get_friend_list" && action != "get_group_member_list" {
 		data = s.idMapper.TranslateActionResponseData(action, data)
 	}
 	return protocol.NewResponse(result.retcode, data, result.message, echo)
 }
 
+func (s *Server) formatOneBotListResponse(action string, data any) any {
+	switch action {
+	case "get_group_list":
+		items := rawArray(data)
+		groups := make([]any, 0, len(items))
+		for _, item := range items {
+			fields := rawObject(item)
+			chatroom := firstRawIdentifier(fields, "chatroom_name", "wxid", "group_id")
+			if chatroom == "" {
+				continue
+			}
+			name := firstRawString(fields, "group_name", "topic", "name")
+			if name == "" {
+				name = chatroom
+			}
+			groups = append(groups, map[string]any{
+				"group_id":   s.oneBotGroupID(chatroom),
+				"group_name": name,
+			})
+		}
+		return groups
+	case "get_friend_list":
+		items := rawArray(data)
+		friends := make([]any, 0, len(items))
+		for _, item := range items {
+			fields := rawObject(item)
+			wxid := firstRawIdentifier(fields, "wxid", "user_id", "account")
+			if wxid == "" {
+				continue
+			}
+			friends = append(friends, map[string]any{
+				"user_id":  s.oneBotUserID(wxid),
+				"nickname": firstRawString(fields, "nickname", "name"),
+			})
+		}
+		return friends
+	case "get_group_member_list":
+		fields := rawObject(data)
+		chatroom := firstRawIdentifier(fields, "chatroom_name", "group_id", "wxid")
+		owner := firstRawIdentifier(fields, "owner_wxid", "owner")
+		items := rawArray(fields["members"])
+		if len(items) == 0 {
+			items = rawArray(data)
+		}
+		members := make([]any, 0, len(items))
+		for _, item := range items {
+			memberFields := rawObject(item)
+			wxid := firstRawIdentifier(memberFields, "wxid", "user_id", "member_wxid")
+			if wxid == "" {
+				continue
+			}
+			nickname := firstRawString(memberFields, "nickname", "name")
+			role := "member"
+			if wxid == owner || rawParamBool(memberFields, "is_owner") {
+				role = "owner"
+			}
+			members = append(members, map[string]any{
+				"group_id":          s.oneBotGroupID(chatroom),
+				"user_id":           s.oneBotUserID(wxid),
+				"nickname":          nickname,
+				"card":              nickname,
+				"role":              role,
+				"sex":               "unknown",
+				"age":               0,
+				"area":              "",
+				"join_time":         0,
+				"last_sent_time":    0,
+				"level":             "",
+				"unfriendly":        false,
+				"title":             "",
+				"title_expire_time": 0,
+				"card_changeable":   false,
+			})
+		}
+		return members
+	default:
+		return data
+	}
+}
+
+func rawArray(value any) []json.RawMessage {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(encoded, &items) != nil {
+		return nil
+	}
+	return items
+}
+
+func firstRawIdentifier(fields map[string]json.RawMessage, keys ...string) string {
+	for _, key := range keys {
+		if value := rawValueText(fields[key]); value != "" && value != "null" {
+			return value
+		}
+	}
+	return ""
+}
+
+func rawValueText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return strings.TrimSpace(text)
+	}
+	var number json.Number
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if decoder.Decode(&number) == nil {
+		return number.String()
+	}
+	return ""
+}
+
+func (s *Server) oneBotUserID(wxid string) any {
+	if s.idMapper != nil {
+		return s.idMapper.UserWxidToNum(wxid)
+	}
+	if id, err := strconv.ParseInt(wxid, 10, 64); err == nil {
+		return id
+	}
+	return wxid
+}
+
+func (s *Server) oneBotGroupID(chatroom string) any {
+	if s.idMapper != nil {
+		return s.idMapper.GroupChatroomToNum(chatroom)
+	}
+	if id, err := strconv.ParseInt(chatroom, 10, 64); err == nil {
+		return id
+	}
+	return chatroom
+}
+
 func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw json.RawMessage) oneBotCallResult {
-	if cfg := s.currentGatewayConfig(); cfg.QQCompat && s.idMapper != nil {
+	cfg := s.currentGatewayConfig()
+	if s.idMapper != nil && (cfg.QQCompat || action == "delete_msg" || action == "get_group_member_list") {
 		raw = s.idMapper.TranslateActionParams(action, raw)
 	}
 	if strings.TrimSpace(rawString(raw)) == "" {
@@ -181,11 +321,14 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 	case "get_group_root_files", "get_group_files_by_folder", "get_group_file_url":
 		return oneBotCallResult{data: map[string]any{"files": []any{}, "folders": []any{}}}
 	case "get_group_member_list":
-		group := rawParamString(params, "group_id")
+		group := rawParamIdentifier(params, "group_id")
+		if s.idMapper != nil {
+			group = s.idMapper.GroupIDToChatroom(group)
+		}
 		if group == "" {
 			return invalidOneBotParam("group_id is required")
 		}
-		result := s.callNative(ctx, "getMemberList", marshalParams(map[string]any{"wxid": group, "group_id": group}))
+		result := s.callNative(ctx, "getMemberList", marshalParams(map[string]any{"wxid": group, "group_id": group, "chatroom_name": group}))
 		if result.retcode != 0 {
 			return oneBotCallResult{data: []any{}}
 		}
@@ -207,7 +350,7 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 		if len(messageID) == 0 || string(messageID) == "null" {
 			return invalidOneBotParam("message_id is required")
 		}
-		return s.callNative(ctx, "revokeMyMsg", marshalParams(map[string]any{"msg_id": json.RawMessage(messageID), "message_id": json.RawMessage(messageID)}))
+		return s.oneBotRevokeMessage(ctx, params)
 	case "get_msg":
 		messageID := params["message_id"]
 		if len(messageID) == 0 || string(messageID) == "null" {
@@ -219,14 +362,41 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 		if group == "" || user == "" {
 			return invalidOneBotParam("group_id and user_id are required")
 		}
-		return s.callNative(ctx, "delMembers", marshalParams(map[string]any{"wxid": group, "group_wxid": group, "member_wxid": user, "user_id": user, "reject_add_request": rawParamBool(params, "reject_add_request")}))
+		return s.callNative(ctx, "delMembers", marshalParams(map[string]any{"chatroom_name": group, "user_list": []string{user}}))
 	case "set_group_leave":
-		group := rawParamString(params, "group_id")
+		group := rawParamIdentifier(params, "group_id")
+		if s.idMapper != nil {
+			group = s.idMapper.GroupIDToChatroom(group)
+		}
 		if group == "" {
 			return invalidOneBotParam("group_id is required")
 		}
-		return s.callNative(ctx, "quitGroup", marshalParams(map[string]any{"wxid": group, "group_wxid": group}))
+		return s.callNative(ctx, "quitGroup", marshalParams(map[string]any{"chatroom_name": group}))
+	case "set_group_card":
+		group := rawParamIdentifier(params, "group_id")
+		if s.idMapper != nil {
+			group = s.idMapper.GroupIDToChatroom(group)
+		}
+		card := firstRawString(params, "card", "nickname")
+		if group == "" || card == "" {
+			return invalidOneBotParam("group_id and card or nickname are required")
+		}
+		return s.callNative(ctx, "editSelfMemberNick", marshalParams(map[string]any{
+			"chatroom_name": group,
+			"nick":          card,
+		}))
+	case "delete_friend":
+		userID := rawParamString(params, "user_id")
+		if userID == "" {
+			return invalidOneBotParam("user_id is required")
+		}
+		return s.callNative(ctx, "delFriend", marshalParams(map[string]any{"wxid": userID, "user_id": userID}))
+	case "set_friend_remark":
+		return s.oneBotEditFriendRemark(ctx, params)
 	case "set_friend_add_request":
+		if rawParamString(params, "flag") == "" && firstRawString(params, "wxid", "user_id") != "" && len(params["remark"]) != 0 {
+			return s.oneBotEditFriendRemark(ctx, params)
+		}
 		flag := rawParamString(params, "flag")
 		if flag == "" {
 			return invalidOneBotParam("flag is required")
@@ -264,6 +434,22 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 			"wxid": wxid, "user_id": wxid, "ticket": ticket, "flag": flag,
 			"encryptusername": encryptusername, "scene": scene, "remark": rawParamString(params, "remark"),
 		}))
+	case "create_group":
+		if len(params["user_list"]) == 0 && len(params["member_list"]) == 0 && len(params["users"]) == 0 {
+			return invalidOneBotParam("user_list, member_list, or users is required")
+		}
+		return s.callNative(ctx, "createGroup", raw)
+	case "add_members":
+		group := firstRawString(params, "chatroom_name", "group_id")
+		if group == "" || (len(params["user_list"]) == 0 && len(params["member_list"]) == 0) {
+			return invalidOneBotParam("group_id and user_list or member_list are required")
+		}
+		fields := make(map[string]any, len(params)+1)
+		for key, value := range params {
+			fields[key] = json.RawMessage(value)
+		}
+		fields["chatroom_name"] = group
+		return s.callNative(ctx, "addMembers", marshalParams(fields))
 	case "set_group_add_request":
 		return oneBotCallResult{retcode: 1405, data: map[string]any{}, message: "group add requests are not supported by the native bridge"}
 	case "send_xml", "send_card", "send_applet", "query_obj", "set_read_status":
@@ -271,6 +457,94 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 	default:
 		return s.dispatchExtendedOneBot(ctx, action, params)
 	}
+}
+
+func (s *Server) oneBotRevokeMessage(ctx context.Context, params map[string]json.RawMessage) oneBotCallResult {
+	messageID := rawParamIdentifier(params, "message_id")
+	if messageID == "" {
+		return invalidOneBotParam("message_id is required")
+	}
+	nativeMessageID := messageID
+	if s.idMapper != nil {
+		nativeMessageID = s.idMapper.MessageIDToNative(messageID)
+	}
+	contextInfo := revokeMessageContext{}
+	if s.idMapper != nil {
+		contextInfo, _ = s.idMapper.revokeMessage(nativeMessageID)
+	}
+
+	toUser := rawParamIdentifier(params, "to_user", "session")
+	if toUser == "" {
+		group := rawParamIdentifier(params, "group_id")
+		user := rawParamIdentifier(params, "user_id", "wxid")
+		if group != "" && s.idMapper != nil {
+			toUser = s.idMapper.GroupIDToChatroom(group)
+		} else if user != "" && s.idMapper != nil {
+			toUser = s.idMapper.UserIDToWxid(user)
+		} else if group != "" {
+			toUser = group
+		} else {
+			toUser = user
+		}
+	}
+	if toUser == "" {
+		toUser = contextInfo.ToUser
+	}
+	if toUser == "" {
+		return invalidOneBotParam("message context is unavailable; to_user, group_id, or user_id is required")
+	}
+
+	clientMsgID := rawParamIdentifier(params, "client_msg_id", "msg_id")
+	if clientMsgID == "" {
+		clientMsgID = contextInfo.ClientMsgID
+	}
+	if clientMsgID == "" {
+		clientMsgID = nativeMessageID
+	}
+	svrMsgID := rawParamIdentifier(params, "svr_msg_id")
+	if svrMsgID == "" {
+		svrMsgID = contextInfo.SvrMsgID
+	}
+	createTime := rawParamIdentifier(params, "create_time")
+	if createTime == "" {
+		createTime = contextInfo.CreateTime
+	}
+	return s.callNative(ctx, "revoke_msg", marshalParams(map[string]any{
+		"to_user":       toUser,
+		"client_msg_id": clientMsgID,
+		"msg_id":        clientMsgID,
+		"svr_msg_id":    numberOrZero(svrMsgID),
+		"create_time":   numberOrZero(createTime),
+	}))
+}
+
+func numberOrZero(value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return uint64(0)
+	}
+	if number, err := strconv.ParseUint(value, 10, 64); err == nil {
+		return number
+	}
+	return value
+}
+
+func (s *Server) oneBotEditFriendRemark(ctx context.Context, params map[string]json.RawMessage) oneBotCallResult {
+	wxid := firstRawString(params, "wxid", "user_id")
+	if wxid == "" {
+		return invalidOneBotParam("user_id is required")
+	}
+	remarkRaw, exists := params["remark"]
+	if !exists || string(remarkRaw) == "null" {
+		return invalidOneBotParam("remark is required")
+	}
+	var remark string
+	if err := json.Unmarshal(remarkRaw, &remark); err != nil {
+		return invalidOneBotParam("remark must be a string")
+	}
+	return s.callNative(ctx, "editObjRemark", marshalParams(map[string]any{
+		"wxid": wxid, "remark": remark,
+	}))
 }
 
 func (s *Server) oneBotSendMessage(ctx context.Context, action string, params map[string]json.RawMessage) oneBotCallResult {
@@ -472,6 +746,10 @@ func firstRawString(fields map[string]json.RawMessage, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func rawParamIdentifier(params map[string]json.RawMessage, keys ...string) string {
+	return firstRawString(params, keys...)
 }
 
 func rawParamBool(params map[string]json.RawMessage, key string) bool {

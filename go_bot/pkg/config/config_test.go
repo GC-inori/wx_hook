@@ -15,7 +15,7 @@ func TestSaveConfigRoundTripsPolicyAndEndpoints(t *testing.T) {
 		Logging:  LoggingConfig{Dir: "logs", Level: "debug", ToConsole: false},
 		Launcher: LauncherConfig{AutoStart: true, BridgeLib: "./bridge.so", Display: ":99", UseXvfb: true, XvfbScreen: "1280x1024x24", QRPort: 8899, QRBind: "127.0.0.1", LoginTimeout: 90},
 		Policy: PolicyConfig{
-			AntiRevoke: true, AutoAgreeFriend: true, AutoAgreeGroup: false, FilterGh: true, MediaDir: "data/media", RetryCount: 4,
+			MediaDir:         "data/media",
 			RateLimitEnabled: false, MaxMessagesPerSec: 0, TargetMinIntervalMs: 600, JitterMinMs: 200, JitterMaxMs: 800, AntiLoopWindowSec: 3,
 		},
 		Endpoints: []EndpointConfig{{ID: "webhook-1", Name: "Events", Type: "httpClient", URL: "http://127.0.0.1:9000/events", Token: "secret", Enabled: true}},
@@ -31,8 +31,7 @@ func TestSaveConfigRoundTripsPolicyAndEndpoints(t *testing.T) {
 		t.Fatalf("QQ compatibility flag did not round-trip: got %v, want %v", loaded.Gateway.QQCompat, cfg.Gateway.QQCompat)
 	}
 	loadedPolicy, originalPolicy := loaded.Policy, cfg.Policy
-	loadedPolicy.BlacklistWxids, originalPolicy.BlacklistWxids = nil, nil
-	loadedPolicy.WhitelistGroups, originalPolicy.WhitelistGroups = nil, nil
+
 	if !reflect.DeepEqual(loadedPolicy, originalPolicy) || len(loaded.Endpoints) != 1 || loaded.Endpoints[0] != cfg.Endpoints[0] {
 		t.Fatalf("saved configuration changed: policy=%+v endpoints=%+v", loaded.Policy, loaded.Endpoints)
 	}

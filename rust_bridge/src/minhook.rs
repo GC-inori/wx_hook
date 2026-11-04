@@ -22,7 +22,11 @@ pub enum MhStatus {
 extern "C" {
     fn MH_Initialize() -> i32;
     fn MH_Uninitialize() -> i32;
-    fn MH_CreateHook(p_target: *mut c_void, p_detour: *mut c_void, pp_original: *mut *mut c_void) -> i32;
+    fn MH_CreateHook(
+        p_target: *mut c_void,
+        p_detour: *mut c_void,
+        pp_original: *mut *mut c_void,
+    ) -> i32;
     fn MH_EnableHook(p_target: *mut c_void) -> i32;
     fn MH_DisableHook(p_target: *mut c_void) -> i32;
     fn MH_RemoveHook(p_target: *mut c_void) -> i32;

@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+
+	"wxbot/pkg/client"
 )
 
 func TestQQCompatActionsReverseIDsAndIgnoreReplies(t *testing.T) {
@@ -55,6 +58,168 @@ func TestQQCompatActionsReverseIDsAndIgnoreReplies(t *testing.T) {
 		if status != http.StatusOK || response.Retcode != 0 || !ok || !filesOK || !foldersOK || len(files) != 0 || len(folders) != 0 {
 			t.Fatalf("unexpected %s response: status=%d response=%+v", action, status, response)
 		}
+	}
+}
+
+func TestContactAndPaymentActionsForwardToNativeBridge(t *testing.T) {
+	type nativeCall struct {
+		action string
+		params map[string]json.RawMessage
+	}
+	calls := make(chan nativeCall, 8)
+	server := testServer(t, "en-US", fakeCaller{call: func(_ context.Context, action string, data any) (json.RawMessage, error) {
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(data.(json.RawMessage), &params); err != nil {
+			t.Errorf("invalid native parameters: %v", err)
+		}
+		calls <- nativeCall{action: action, params: params}
+		return json.RawMessage(`{"ok":true}`), nil
+	}}, "")
+
+	for _, tc := range []struct {
+		action string
+		params string
+		want   string
+	}{
+		{"confirm_trans", `{"transfer_id":"tr-1","invalid_time":"1730000000"}`, "confirmTrans"},
+		{"confirmTrans", `{"trans_id":"tr-2","invalid_time":"1730000001"}`, "confirmTrans"},
+		{"receive_hong_bao", `{"send_id":"send-1","channel_id":"1","native_url":"wxpay://hb","session_wxid":"wxid_sender","in_way":1}`, "receiveHongBao"},
+		{"openHongBao", `{"channel_id":"1","native_url":"wxpay://hb","session_wxid":"wxid_sender","timing_identifier":"time-1","nick_name":"Bot"}`, "openHongBao"},
+		{"delete_friend", `{"user_id":"wxid_target"}`, "delFriend"},
+		{"del_friend", `{"user_id":"wxid_target"}`, "delFriend"},
+		{"delFriend", `{"wxid":"wxid_target"}`, "delFriend"},
+	} {
+		status, response := request(t, server, http.MethodPost, `{"action":"`+tc.action+`","params":`+tc.params+`}`)
+		if status != http.StatusOK || response.Retcode != 0 {
+			t.Fatalf("%s returned status=%d response=%+v", tc.action, status, response)
+		}
+		call := <-calls
+		if call.action != tc.want {
+			t.Errorf("%s dispatched %q, want %q", tc.action, call.action, tc.want)
+		}
+		if tc.want == "delFriend" && rawParamString(call.params, "wxid") != "wxid_target" {
+			t.Errorf("%s did not map user_id to wxid: %#v", tc.action, call.params)
+		}
+	}
+}
+
+func TestOneBotGroupAndRemarkActionsDispatchToNativeAtomics(t *testing.T) {
+	type nativeCall struct {
+		action string
+		params map[string]any
+	}
+	calls := make(chan nativeCall, 7)
+	server := testServer(t, "en-US", fakeCaller{call: func(_ context.Context, action string, data any) (json.RawMessage, error) {
+		var params map[string]any
+		if err := json.Unmarshal(data.(json.RawMessage), &params); err != nil {
+			t.Errorf("invalid native parameters: %v", err)
+		}
+		calls <- nativeCall{action: action, params: params}
+		return json.RawMessage(`{"ok":true}`), nil
+	}}, "")
+
+	for _, tc := range []struct {
+		action string
+		params string
+		want   nativeCall
+	}{
+		{"set_group_kick", `{"group_id":"room@chatroom","user_id":"wxid_member"}`, nativeCall{"delMembers", map[string]any{"chatroom_name": "room@chatroom", "user_list": []any{"wxid_member"}}}},
+		{"set_group_leave", `{"group_id":"room@chatroom"}`, nativeCall{"quitGroup", map[string]any{"chatroom_name": "room@chatroom"}}},
+		{"set_group_card", `{"group_id":"room@chatroom","card":"Alice"}`, nativeCall{"editSelfMemberNick", map[string]any{"chatroom_name": "room@chatroom", "nick": "Alice"}}},
+		{"set_friend_remark", `{"user_id":"wxid_friend","remark":"Friend"}`, nativeCall{"editObjRemark", map[string]any{"wxid": "wxid_friend", "remark": "Friend"}}},
+		{"set_friend_add_request", `{"wxid":"wxid_friend","remark":"Friend"}`, nativeCall{"editObjRemark", map[string]any{"wxid": "wxid_friend", "remark": "Friend"}}},
+		{"create_group", `{"user_list":["wxid_a","wxid_b"],"topic":"team"}`, nativeCall{"createGroup", map[string]any{"user_list": []any{"wxid_a", "wxid_b"}, "topic": "team"}}},
+		{"add_members", `{"group_id":"room@chatroom","user_list":["wxid_a"]}`, nativeCall{"addMembers", map[string]any{"chatroom_name": "room@chatroom", "group_id": "room@chatroom", "user_list": []any{"wxid_a"}}}},
+	} {
+		status, response := request(t, server, http.MethodPost, `{"action":"`+tc.action+`","params":`+tc.params+`}`)
+		if status != http.StatusOK || response.Retcode != 0 {
+			t.Fatalf("%s returned status=%d response=%+v", tc.action, status, response)
+		}
+		got := <-calls
+		if got.action != tc.want.action || !reflect.DeepEqual(got.params, tc.want.params) {
+			t.Errorf("%s dispatched %#v, want %#v", tc.action, got, tc.want)
+		}
+	}
+}
+
+func TestOneBotListAndRevokeActionsAdaptDataAndReverseIDs(t *testing.T) {
+	type nativeCall struct {
+		action string
+		params map[string]json.RawMessage
+	}
+	calls := make(chan nativeCall, 4)
+	server := testServer(t, "en-US", fakeCaller{call: func(_ context.Context, action string, data any) (json.RawMessage, error) {
+		params := make(map[string]json.RawMessage)
+		if err := json.Unmarshal(data.(json.RawMessage), &params); err != nil {
+			return nil, err
+		}
+		calls <- nativeCall{action: action, params: params}
+		switch action {
+		case "getGroupList":
+			return json.RawMessage(`[{"chatroom_name":"room@chatroom","wxid":"room@chatroom"}]`), nil
+		case "getFriendList":
+			return json.RawMessage(`[{"wxid":"wxid_friend","nickname":"Friend"}]`), nil
+		case "getMemberList":
+			return json.RawMessage(`{"chatroom_name":"room@chatroom","owner_wxid":"wxid_owner","members":[{"wxid":"wxid_owner","nickname":"Owner","is_owner":true},{"wxid":"wxid_member","nickname":"Member","is_owner":false}]}`), nil
+		default:
+			return json.RawMessage(`{"revoked":true}`), nil
+		}
+	}}, "")
+	cfg := server.currentConfig()
+	cfg.Gateway.QQCompat = true
+	server.SetConfig(&cfg, t.TempDir())
+	groupID := server.idMapper.GroupChatroomToNum("room@chatroom")
+	friendID := server.idMapper.UserWxidToNum("wxid_friend")
+	ownerID := server.idMapper.UserWxidToNum("wxid_owner")
+	memberID := server.idMapper.UserWxidToNum("wxid_member")
+	messageID := server.idMapper.MessageIDToNum("native-msg-42")
+	server.rememberIncomingMessage(client.Event{
+		Event: "recvMsg",
+		Data:  json.RawMessage(`{"msg_id":"native-msg-42","client_msg_id":"client-msg-42","from_wxid":"room@chatroom","final_from_wxid":"wxid_owner","svr_msg_id":90042,"create_time":1730000000}`),
+	}, "wxid_self")
+
+	_, response := request(t, server, http.MethodPost, `{"action":"get_group_list","params":{}}`)
+	groupCall := <-calls
+	if groupCall.action != "getGroupList" {
+		t.Fatalf("get_group_list dispatched %q", groupCall.action)
+	}
+	groups, ok := response.Data.([]any)
+	if !ok || len(groups) != 1 || groups[0].(map[string]any)["group_id"] != float64(groupID) || groups[0].(map[string]any)["group_name"] != "room@chatroom" {
+		t.Fatalf("unexpected OneBot group list response: %#v", response.Data)
+	}
+
+	_, response = request(t, server, http.MethodPost, `{"action":"get_friend_list","params":{}}`)
+	friendCall := <-calls
+	if friendCall.action != "getFriendList" {
+		t.Fatalf("get_friend_list dispatched %q", friendCall.action)
+	}
+	friends, ok := response.Data.([]any)
+	if !ok || len(friends) != 1 || friends[0].(map[string]any)["user_id"] != float64(friendID) || friends[0].(map[string]any)["nickname"] != "Friend" {
+		t.Fatalf("unexpected OneBot friend list response: %#v", response.Data)
+	}
+
+	_, response = request(t, server, http.MethodPost, `{"action":"get_group_member_list","params":{"group_id":200000001}}`)
+	memberCall := <-calls
+	if memberCall.action != "getMemberList" || rawParamString(memberCall.params, "group_id") != "room@chatroom" {
+		t.Fatalf("group ID was not reversed for member lookup: %#v", memberCall)
+	}
+	members, ok := response.Data.([]any)
+	if !ok || len(members) != 2 {
+		t.Fatalf("unexpected OneBot member list response: %#v", response.Data)
+	}
+	owner := members[0].(map[string]any)
+	member := members[1].(map[string]any)
+	if owner["group_id"] != float64(groupID) || owner["user_id"] != float64(ownerID) || owner["role"] != "owner" || member["user_id"] != float64(memberID) || member["role"] != "member" {
+		t.Fatalf("member IDs or roles were not adapted: %#v", members)
+	}
+
+	_, response = request(t, server, http.MethodPost, `{"action":"delete_msg","params":{"message_id":1000001}}`)
+	revokeCall := <-calls
+	if revokeCall.action != "revoke_msg" || rawParamString(revokeCall.params, "to_user") != "room@chatroom" || rawParamString(revokeCall.params, "client_msg_id") != "client-msg-42" || rawParamString(revokeCall.params, "svr_msg_id") != "90042" || rawParamString(revokeCall.params, "create_time") != "1730000000" {
+		t.Fatalf("delete_msg did not produce native revoke parameters: action=%s params=%s", revokeCall.action, marshalParams(revokeCall.params))
+	}
+	if response.Retcode != 0 || messageID != 1000001 {
+		t.Fatalf("delete_msg failed: response=%+v message_id=%d", response, messageID)
 	}
 }
 

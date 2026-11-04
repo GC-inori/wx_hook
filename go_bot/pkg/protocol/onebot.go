@@ -38,9 +38,10 @@ type ActionRequest struct {
 // OneBotActions lists standard OneBot 11 actions implemented or recognized by this gateway.
 var OneBotActions = []string{
 	"send_msg", "send_group_msg", "send_private_msg", "delete_msg", "get_msg", "get_login_info",
-	"get_friend_list", "get_group_list", "get_group_member_list", "get_group_member_info", "set_group_kick",
+	"get_friend_list", "get_group_list", "get_group_member_list", "get_group_member_info", "set_group_kick", "set_group_card",
 	"get_group_root_files", "get_group_files_by_folder", "get_group_file_url",
-	"set_group_leave", "set_friend_add_request", "set_group_add_request", "get_status", "get_version_info",
+	"set_group_leave", "set_friend_add_request", "set_friend_remark", "set_group_add_request", "delete_friend", "get_status", "get_version_info",
+	"create_group", "add_members",
 	"send_xml", "send_card", "send_applet", "query_obj", "set_read_status",
 }
 

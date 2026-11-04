@@ -66,7 +66,7 @@ func TestEntireActionMatrixAndRawArguments(t *testing.T) {
 		}
 		return json.RawMessage(`{"msg_id":"18446744073709551615"}`), nil
 	}}, "")
-	if len(protocol.Actions) != 33 {
+	if len(protocol.Actions) != 36 {
 		t.Fatalf("action matrix changed: %d", len(protocol.Actions))
 	}
 	for _, action := range protocol.Actions {
@@ -164,7 +164,7 @@ func TestConfigGetAndPost(t *testing.T) {
 	updated.Gateway.APIToken = "next-token"
 	updated.Gateway.AllowedOrigins = []string{"https://dashboard.example"}
 	updated.Policy = config.PolicyConfig{
-		AntiRevoke: true, MediaDir: "media", RetryCount: 2,
+		MediaDir:         "media",
 		RateLimitEnabled: true, MaxMessagesPerSec: 4, TargetMinIntervalMs: 40, JitterMinMs: 10, JitterMaxMs: 20, AntiLoopWindowSec: 2,
 	}
 	updated.Endpoints = []config.EndpointConfig{{ID: "ep-1", Name: "webhook", Type: "httpClient", URL: "http://127.0.0.1:9999/hook", Enabled: true}}
@@ -196,7 +196,7 @@ func TestConfigGetAndPost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Gateway.APIToken != "next-token" || loaded.Policy.RetryCount != 2 || len(loaded.Endpoints) != 1 {
+	if loaded.Gateway.APIToken != "next-token" || loaded.Policy.MediaDir != "media" || len(loaded.Endpoints) != 1 {
 		t.Fatalf("saved configuration was not updated: %+v", loaded)
 	}
 
@@ -353,7 +353,7 @@ func TestWebSocketAllEventsAndShutdown(t *testing.T) {
 		t.Fatalf("websocket upgrade: %v %+v", err, resp)
 	}
 	defer conn.Close()
-	for _, name := range []string{"recvMsg", "revokeMsg", "friendReq", "transPay", "qrPay", "groupMemberChanges"} {
+	for _, name := range []string{"recvMsg", "revokeMsg", "friendReq", "transPay", "hongBao", "qrPay", "groupMemberChanges"} {
 		s.Publish(client.Event{Event: name, Data: json.RawMessage(`{"msg_id":"18446744073709551615"}`)})
 		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		var event map[string]any

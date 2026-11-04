@@ -67,12 +67,13 @@ gateway:
   max_connections: 128
 
 policy:
-  anti_revoke: true # 开启消息防撤回监听
-  auto_agree_friend: false # 自动同意好友申请
-  auto_agree_group: true # 自动同意入群邀请
-  filter_gh: true # 过滤公众号推广推送
   media_dir: "data/media"
-  retry_count: 3
+  rate_limit_enabled: true # 出站节流保护
+  max_messages_per_sec: 5
+  target_min_interval_ms: 600
+  jitter_min_ms: 200
+  jitter_max_ms: 800
+  anti_loop_window_sec: 3
 
 logging:
   dir: "logs"

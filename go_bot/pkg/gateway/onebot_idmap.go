@@ -35,6 +35,7 @@ type IDMapper struct {
 	groupsReverse   map[int64]string
 	messages        map[string]int32
 	messagesReverse map[int32]string
+	messageContexts map[string]revokeMessageContext
 
 	nextUserID    int64
 	nextGroupID   int64
@@ -42,6 +43,13 @@ type IDMapper struct {
 	rootDir       string
 	filePath      string
 	lastErr       error
+}
+
+type revokeMessageContext struct {
+	ToUser      string
+	ClientMsgID string
+	SvrMsgID    string
+	CreateTime  string
 }
 
 type idMappingFile struct {
@@ -71,7 +79,8 @@ func newIDMapper() *IDMapper {
 		users: make(map[string]int64), usersReverse: make(map[int64]string),
 		groups: make(map[string]int64), groupsReverse: make(map[int64]string),
 		messages: make(map[string]int32), messagesReverse: make(map[int32]string),
-		nextUserID: firstUserID, nextGroupID: firstGroupID, nextMessageID: firstMessageID,
+		messageContexts: make(map[string]revokeMessageContext),
+		nextUserID:      firstUserID, nextGroupID: firstGroupID, nextMessageID: firstMessageID,
 	}
 }
 
@@ -168,6 +177,15 @@ func (m *IDMapper) NumToUserWxid(id int64) string {
 	return strconv.FormatInt(id, 10)
 }
 
+// UserIDToWxid reverses a numeric OneBot user ID when it is known.
+func (m *IDMapper) UserIDToWxid(value string) string {
+	value = strings.TrimSpace(value)
+	if id, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return m.NumToUserWxid(id)
+	}
+	return value
+}
+
 // GroupChatroomToNum returns the stable numeric OneBot ID for a WeChat group.
 func (m *IDMapper) GroupChatroomToNum(chatroom string) int64 {
 	if m == nil || strings.TrimSpace(chatroom) == "" {
@@ -204,6 +222,15 @@ func (m *IDMapper) NumToGroupChatroom(id int64) string {
 		return chatroom
 	}
 	return strconv.FormatInt(id, 10)
+}
+
+// GroupIDToChatroom reverses a numeric OneBot group ID when it is known.
+func (m *IDMapper) GroupIDToChatroom(value string) string {
+	value = strings.TrimSpace(value)
+	if id, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return m.NumToGroupChatroom(id)
+	}
+	return value
 }
 
 // MessageIDToNum maps a native message identifier to the signed 32-bit ID
@@ -243,6 +270,34 @@ func (m *IDMapper) NumToMessageID(id int32) string {
 		return messageID
 	}
 	return strconv.FormatInt(int64(id), 10)
+}
+
+// MessageIDToNative reverses a numeric OneBot message ID when it is known.
+func (m *IDMapper) MessageIDToNative(value string) string {
+	value = strings.TrimSpace(value)
+	if id, err := strconv.ParseInt(value, 10, 32); err == nil {
+		return m.NumToMessageID(int32(id))
+	}
+	return value
+}
+
+func (m *IDMapper) rememberRevokeMessage(nativeID string, context revokeMessageContext) {
+	if m == nil || strings.TrimSpace(nativeID) == "" || context.ToUser == "" {
+		return
+	}
+	m.mu.Lock()
+	m.messageContexts[nativeID] = context
+	m.mu.Unlock()
+}
+
+func (m *IDMapper) revokeMessage(nativeID string) (revokeMessageContext, bool) {
+	if m == nil {
+		return revokeMessageContext{}, false
+	}
+	m.mu.RLock()
+	context, ok := m.messageContexts[nativeID]
+	m.mu.RUnlock()
+	return context, ok
 }
 
 // TranslateEvent returns a translated copy of a formatted OneBot event.
@@ -323,7 +378,12 @@ func (m *IDMapper) translateValue(value any, direction translationDirection, key
 				typed[childKey] = m.translateID(child, direction, "message_id")
 				continue
 			}
-			typed[childKey] = m.translateValue(child, direction, childKey)
+			switch childKey {
+			case "user_list", "member_list", "users":
+				typed[childKey] = m.translateUserList(child, direction)
+			default:
+				typed[childKey] = m.translateValue(child, direction, childKey)
+			}
 		}
 		return typed
 	case []any:
@@ -336,7 +396,7 @@ func (m *IDMapper) translateValue(value any, direction translationDirection, key
 			return m.translateCQAt(typed, direction)
 		}
 		switch key {
-		case "self_id", "user_id", "wxid", "user_wxid", "member_wxid", "from_wxid", "sender_wxid", "account", "group_id", "group_wxid", "chatroom_id", "message_id", "msg_id", "sequence":
+		case "self_id", "user_id", "wxid", "user_wxid", "member_wxid", "from_wxid", "sender_wxid", "account", "group_id", "group_wxid", "chatroom_id", "chatroom_name", "to_user", "session", "message_id", "msg_id", "sequence":
 			return m.translateID(typed, direction, key)
 		}
 		if key == "qq" && typed != "all" {
@@ -353,12 +413,49 @@ func (m *IDMapper) translateValue(value any, direction translationDirection, key
 	}
 }
 
+func (m *IDMapper) translateUserList(value any, direction translationDirection) any {
+	switch typed := value.(type) {
+	case []any:
+		for i := range typed {
+			typed[i] = m.translateID(typed[i], direction, "user_id")
+		}
+		return typed
+	case string:
+		parts := strings.Split(typed, ",")
+		for i := range parts {
+			parts[i] = fmt.Sprint(m.translateID(strings.TrimSpace(parts[i]), direction, "user_id"))
+		}
+		return strings.Join(parts, ",")
+	default:
+		return m.translateValue(value, direction, "user_id")
+	}
+}
+
 func (m *IDMapper) translateID(value any, direction translationDirection, key string) any {
 	text := idText(value)
 	if text == "" {
 		return value
 	}
 	switch key {
+	case "to_user", "session":
+		if direction == translateForward {
+			if strings.HasSuffix(text, "@chatroom") {
+				return m.GroupChatroomToNum(text)
+			}
+			return m.UserWxidToNum(text)
+		}
+		if id, ok := numericID(value); ok {
+			m.mu.RLock()
+			chatroom := m.groupsReverse[id]
+			wxid := m.usersReverse[id]
+			m.mu.RUnlock()
+			if chatroom != "" {
+				return chatroom
+			}
+			if wxid != "" {
+				return wxid
+			}
+		}
 	case "self_id", "user_id", "wxid", "user_wxid", "member_wxid", "from_wxid", "sender_wxid", "account", "qq":
 		if direction == translateForward {
 			return m.UserWxidToNum(text)
@@ -371,7 +468,7 @@ func (m *IDMapper) translateID(value any, direction translationDirection, key st
 				return wxid
 			}
 		}
-	case "group_id", "group_wxid", "chatroom_id":
+	case "group_id", "group_wxid", "chatroom_id", "chatroom_name":
 		if direction == translateForward {
 			return m.GroupChatroomToNum(text)
 		}

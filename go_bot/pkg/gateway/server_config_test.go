@@ -66,13 +66,11 @@ func TestConfiguredRequestTimeoutAndBodyLimit(t *testing.T) {
 	}
 }
 
-func TestWebSocketSettingsAndPolicyFilters(t *testing.T) {
+func TestWebSocketSettingsAndEventForwarding(t *testing.T) {
 	s := testServer(t, "en-US", fakeCaller{}, "")
 	cfg := validConfig("en-US")
 	cfg.Gateway.WSQueueSize = 16
 	cfg.Gateway.WSPingIntervalSec = 5
-	cfg.Policy.BlacklistWxids = []string{"wxid_blocked"}
-	cfg.Policy.WhitelistGroups = []string{"room_allowed@chatroom"}
 	s.SetConfig(cfg, t.TempDir())
 	if s.websocketQueueSize() != 16 || s.websocketPingInterval() != 5*time.Second {
 		t.Fatalf("WebSocket options not applied: queue=%d ping=%s", s.websocketQueueSize(), s.websocketPingInterval())
@@ -82,15 +80,16 @@ func TestWebSocketSettingsAndPolicyFilters(t *testing.T) {
 	if !s.hub.add(peer) {
 		t.Fatal("unable to register test subscriber")
 	}
-	s.Publish(client.Event{Event: "recvMsg", Data: json.RawMessage(`{"sender":"wxid_blocked","receiver":"room_allowed@chatroom"}`)})
-	s.Publish(client.Event{Event: "recvMsg", Data: json.RawMessage(`{"sender":"friend","receiver":"room_denied@chatroom"}`)})
-	if len(peer.queue) != 0 {
-		t.Fatalf("filtered events were published: %d queued", len(peer.queue))
+	for _, event := range []client.Event{
+		{Event: "recvMsg", Data: json.RawMessage(`{"sender":"wxid_blocked","receiver":"room_allowed@chatroom"}`)},
+		{Event: "recvMsg", Data: json.RawMessage(`{"sender":"friend","receiver":"room_denied@chatroom"}`)},
+		{Event: "recvMsg", Data: json.RawMessage(`{"sender":"friend","receiver":"room_allowed@chatroom"}`)},
+		{Event: "recvMsg", Data: json.RawMessage(`{"sender":"friend","receiver":"friend"}`)},
+	} {
+		s.Publish(event)
 	}
-	s.Publish(client.Event{Event: "recvMsg", Data: json.RawMessage(`{"sender":"friend","receiver":"room_allowed@chatroom"}`)})
-	s.Publish(client.Event{Event: "recvMsg", Data: json.RawMessage(`{"sender":"friend","receiver":"friend"}`)})
-	if len(peer.queue) != 2 {
-		t.Fatalf("allowed events queued = %d, want 2", len(peer.queue))
+	if len(peer.queue) != 4 {
+		t.Fatalf("forwarded events = %d, want 4", len(peer.queue))
 	}
 }
 
@@ -129,50 +128,34 @@ func TestQQCompatWebhookReceivesTranslatedEvent(t *testing.T) {
 	}
 }
 
-func TestBlacklistBlocksOutboundDestination(t *testing.T) {
+func TestOutboundDestinationIsForwardedWithoutBusinessFiltering(t *testing.T) {
 	called := false
-	s := testServer(t, "en-US", fakeCaller{call: func(context.Context, string, any) (json.RawMessage, error) {
-		called = true
+	server := testServer(t, "en-US", fakeCaller{call: func(_ context.Context, action string, data any) (json.RawMessage, error) {
+		called = action == "sendText"
 		return json.RawMessage(`{}`), nil
 	}}, "")
 	cfg := validConfig("en-US")
-	cfg.Policy.BlacklistWxids = []string{"wxid_blocked"}
 	cfg.Gateway.APIToken = ""
-	s.SetConfig(cfg, t.TempDir())
-	status, response := request(t, s, http.MethodPost, `{"action":"sendText","params":{"wxid":"wxid_blocked","msg":"hello"}}`)
-	if status != http.StatusOK || response.Retcode != 1403 {
-		t.Fatalf("blacklisted destination status = %d response=%+v", status, response)
-	}
-	result, ok := response.Data.(map[string]any)
-	detail, hasDetail := result["detail"].(string)
-	if !ok || !hasDetail || !strings.Contains(detail, "wxid_blocked") {
-		t.Fatalf("missing clear blacklist error: %+v", response.Data)
-	}
-	if called {
-		t.Fatal("blacklisted destination reached caller")
+	server.SetConfig(cfg, t.TempDir())
+	status, response := request(t, server, http.MethodPost, `{"action":"sendText","params":{"wxid":"wxid_target","msg":"hello"}}`)
+	if status != http.StatusOK || response.Retcode != 0 || !called {
+		t.Fatalf("destination was not forwarded: status=%d response=%+v called=%v", status, response, called)
 	}
 }
 
-func TestConfigClonesAllSliceFields(t *testing.T) {
+func TestConfigClonesAllowedOrigins(t *testing.T) {
 	cfg := validConfig("en-US")
 	cfg.Gateway.AllowedOrigins = []string{"https://allowed.example"}
-	cfg.Policy.BlacklistWxids = []string{"wxid_blocked"}
-	cfg.Policy.WhitelistGroups = []string{"room_allowed@chatroom"}
-	s := testServer(t, "en-US", fakeCaller{}, "")
-	s.SetConfig(cfg, t.TempDir())
+	server := testServer(t, "en-US", fakeCaller{}, "")
+	server.SetConfig(cfg, t.TempDir())
 	cfg.Gateway.AllowedOrigins[0] = "https://mutated.example"
-	cfg.Policy.BlacklistWxids[0] = "wxid_mutated"
-	cfg.Policy.WhitelistGroups[0] = "room_mutated@chatroom"
-	stored := s.currentConfig()
-	if stored.Gateway.AllowedOrigins[0] != "https://allowed.example" || stored.Policy.BlacklistWxids[0] != "wxid_blocked" || stored.Policy.WhitelistGroups[0] != "room_allowed@chatroom" {
+	stored := server.currentConfig()
+	if stored.Gateway.AllowedOrigins[0] != "https://allowed.example" {
 		t.Fatalf("stored config aliases caller slices: %+v", stored)
 	}
 	stored.Gateway.AllowedOrigins[0] = "https://read-mutated.example"
-	stored.Policy.BlacklistWxids[0] = "wxid_read_mutated"
-	stored.Policy.WhitelistGroups[0] = "room_read_mutated@chatroom"
-	again := s.currentConfig()
-	if again.Gateway.AllowedOrigins[0] != "https://allowed.example" || again.Policy.BlacklistWxids[0] != "wxid_blocked" || again.Policy.WhitelistGroups[0] != "room_allowed@chatroom" {
-		t.Fatalf("returned config aliases server slices: %+v", again)
+	if got := server.currentConfig().Gateway.AllowedOrigins[0]; got != "https://allowed.example" {
+		t.Fatalf("returned config aliases server slices: %q", got)
 	}
 }
 

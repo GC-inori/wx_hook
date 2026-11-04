@@ -70,6 +70,20 @@
 | **`sendMessage`** | `send_message` | 通用富媒体发送入口（按 msg_type 分发） | `target`, `msg_type`, `content` | `{"sent": true}` |
 | **`send_raw`** | - | Mojo 底层原始字节流投递 | `method`, `sync`, `request_id`, `payload` | `{"sent": true, "bytes": N}` |
 | **`agreeFriendReq`** | `agree_friend_req` | 使用微信 `VerifyUser` 函数提交同意好友申请请求（opcode 2）；在微信主线程执行 | `wxid`/`user_id`, `ticket`/`flag`, `encryptusername`, `scene`（默认 6）, `remark` | `{"agreed": true, "wxid": "..."}` |
+| **`delFriend`** | `delete_friend`, `del_friend` | 获取联系人 Service 并调用微信联系人删除函数；共享指针与 C++ 字符串在调用后释放，微信主线程执行 | `wxid` 或 `user_id` | `{"deleted": true, "wxid": "..."}` |
+| **`createGroup`** | `create_group` | 通过 Chatroom Service 与 libc++ vector ABI 拉人建群；主线程调用并释放服务共享指针、成员字符串向量和结果字符串 | `user_list` / `member_list` / `users`, `topic` / `name` | `{"created": true, "chatroom_name": "...@chatroom"}` |
+| **`addMembers`** | `add_members`, `invite_members` | 调用 Chatroom Service 邀请联系人加入群聊；主线程执行并释放输入向量及结果字符串 | `chatroom_name` / `group_id`, `user_list` / `member_list` | `{"added": true, "chatroom_name": "..."}` |
+| **`delMembers`** | `del_members` | 调用 Chatroom Service 移出指定群成员；主线程执行并释放成员向量、结果缓冲与服务共享指针 | `chatroom_name` / `group_id`, `user_list` / `member_list` | `{"deleted": true, "chatroom_name": "..."}` |
+| **`quitGroup`** | `quit_group` | 通过 Oplog Service 提交主动退群请求；主线程执行并释放共享指针和 C++ 字符串 | `chatroom_name` / `group_id` | `{"quit": true, "chatroom_name": "..."}` |
+| **`editSelfMemberNick`** | `edit_self_member_nick` | 通过 Oplog Service 修改当前账号的群内昵称；主线程执行 | `chatroom_name` / `group_id`, `nick` / `nickname` | `{"updated": true, "chatroom_name": "...", "nick": "..."}` |
+| **`editObjRemark`** | `edit_obj_remark`, `edit_remark` | 构造 64 字节备注对象并调用微信好友备注函数；主线程执行并释放两条 C++ 字符串 | `wxid` / `user_id`, `remark` | `{"updated": true, "wxid": "...", "remark": "..."}` |
+| **`revoke_msg`** | `revokeMyMsg`, `revoke_my_msg` | 构造 72 字节 `RevokeMsgRequest` 并通过网络服务提交撤回 CGI；在微信主线程执行并释放请求字符串 | `to_user` / `session` / `group_id` / `wxid`, `client_msg_id` / `msg_id`, `svr_msg_id`, `create_time` | `{"revoked": true, "to_user": "...", "client_msg_id": "..."}` |
+| **`getGroupList`** | `get_group_list` | 获取联系人存储服务并枚举本地群聊；只返回群 ID 标识，不读取业务策略 | 无 | 群列表数组，成员含 `chatroom_name` / `wxid` |
+| **`getFriendList`** | `get_friend_list` | 从联系人存储枚举普通联系人并补充本地昵称缓存 | 无 | 好友列表数组，成员含 `wxid` / `nickname` |
+| **`getMemberList`** | `get_member_list` | 获取群元数据与成员 wxid 列表；昵称使用本地缓存；查询与遍历在微信主线程进行 | `chatroom_name` / `group_id` | 群对象，含 `owner_wxid`、`member_count` 与 `members` |
+| **`confirmTrans`** | `confirm_trans` | 使用微信 `CO_AcceptPayTransfer` 确认收取转账；在微信主线程执行 | `trans_id`/`transfer_id`, `invalid_time`, `transfer_attach`（可选） | `{"confirmed": true, "trans_id": "..."}` |
+| **`receiveHongBao`** | `receive_hong_bao` | 调用 CGI 1581 查询并预备拆红包，返回微信 JSON 字符串解析后的对象 | `send_id`, `channel_id`, `native_url`, `session_wxid`, `in_way` | 包含 `retcode`, `hbStatus`, `timingIdentifier` 等 |
+| **`openHongBao`** | `open_hong_bao` | 携带第一阶段 `timingIdentifier` 调用 CGI 1685 拆红包 | `channel_id`, `native_url`, `session_wxid`, `timing_identifier`, `nick_name` | 包含 `retcode`, `amount`（分）, `receiveId` 等 |
 
 ---
 
@@ -83,28 +97,18 @@
 | **`revokeMsg`** | `10002` | 消息防撤回通知。提取被撤回的消息 ID (`revoked_msg_id`) 与会话 (`session`) |
 | **`friendReq`** | `37` | 好友申请。解析申请人 `wxid`、昵称、打招呼内容 (`content`)、`ticket` 与 `encryptusername` |
 | **`groupMemberChanges`**| `10000` (含特征标记) | 群成员变动通知（进群、退群、移出群聊）。提取群号 `group_wxid` 与通知内容 |
-| **`transPay`** | `49` (AppType 2000) | 微信转账通知。提取转账金额 `amount` 与交易单号 |
+| **`transPay`** | `49` (AppType 2000) | 微信转账通知。提取转账金额、交易单号、失效时间 `invalid_time` 与附加字段 `transfer_attach` |
 | **`qrPay`** | `49` (AppType 2001) | 二维码收款通知。提取收款金额 `amount` 与单号 |
+| **`hongBao`** | `49` (AppType 2001) | 红包通知。提取 `native_url`、祝福语 `title`、`pay_msg_id`、`send_id` 与 `channel_id`；普通收款仍归类为 `qrPay` |
 | **`systemMsg`** | `10000` | 其它微信系统通知消息 |
 
 ---
 
-## 五、 未实现 / 占位接口清单 (501 Not Implemented)
+## 五、未实现 / 占位接口清单 (501 Not Implemented)
 
-目前以下功能在 `rust_bridge/src/linux/ipc.rs` 中预留了分支，调用时均返回 `retcode: 501 ("Not implemented / In progress")`：
+以下接口仍返回 `retcode: 501 (Not implemented / In progress)`：
 
-1. **消息撤回**：
-   - `revokeMyMsg` / `revoke_msg`：撤回自己在 2 分钟内发出的消息。
-2. **列表枚举**：
-   - `getGroupList` / `get_group_list`：获取加入的微信群列表。
-   - `getMemberList` / `get_member_list`：获取指定群的完整成员列表。
-   - `getPublicList` / `get_public_list`：获取已关注的微信公众号列表。
-   - `getLabelList` / `get_label_list`：获取联系人标签列表。
-3. **关系链与群管理**：
-   - `delFriend` / `del_friend`：删除指定好友。
-   - `createGroup` / `create_group`：拉人建群。
-   - `addMembers` / `inviteMembers`：拉好友进群 / 邀请进群。
-   - `delMembers`：将群成员移出群聊。
-   - `quitGroup`：主动退出微信群。
-   - `editSelfMemberNick`：修改群内自己的群昵称。
-   - `editObjRemark`：修改好友备注。
+1. **联系人扩展列表**：`getPublicList` / `get_public_list`、`getLabelList` / `get_label_list`。
+2. **查询与工具接口**：`queryObj`、`queryGroup`、`returnTrans`、`setReadStatus`、图像解密、登录状态与二维码、浏览器控制及云函数等。
+
+消息撤回、群列表、好友列表和群成员列表已接入 Rust 原子接口，不再属于 501 占位接口。

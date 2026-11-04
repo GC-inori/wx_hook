@@ -72,18 +72,22 @@ func TestDispatchActionSharesPolicyMediaPacingAndIPC(t *testing.T) {
 	}
 }
 
-func TestDispatchActionBlocksBlacklistedDestinationBeforeIPC(t *testing.T) {
-	var calls atomic.Int32
-	s := testServer(t, "en-US", fakeCaller{call: func(context.Context, string, any) (json.RawMessage, error) {
-		calls.Add(1)
-		return nil, nil
+func TestDispatchActionMapsDeleteFriendAliasAndUserID(t *testing.T) {
+	var gotAction string
+	var gotParams map[string]json.RawMessage
+	server := testServer(t, "en-US", fakeCaller{call: func(_ context.Context, action string, data any) (json.RawMessage, error) {
+		gotAction = action
+		if err := json.Unmarshal(data.(json.RawMessage), &gotParams); err != nil {
+			t.Fatal(err)
+		}
+		return json.RawMessage(`{"deleted":true}`), nil
 	}}, "")
-	cfg := validConfig("en-US")
-	cfg.Policy = config.PolicyConfig{BlacklistWxids: []string{"blocked-wxid"}}
-	s.SetConfig(cfg, t.TempDir())
 
-	code, key, result, err := s.DispatchAction(context.Background(), "send_file", json.RawMessage(`{"wxid":"blocked-wxid","file_path":"local.pdf"}`))
-	if err == nil || code != 403 || key != "errors.unauthorized" || calls.Load() != 0 {
-		t.Fatalf("blacklist result: code=%d key=%s result=%v err=%v calls=%d", code, key, result, err, calls.Load())
+	_, _, _, err := server.DispatchAction(context.Background(), "delete_friend", json.RawMessage(`{"user_id":"wxid_target"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAction != "delFriend" || rawParamString(gotParams, "wxid") != "wxid_target" {
+		t.Fatalf("delete_friend dispatch = %q %#v", gotAction, gotParams)
 	}
 }

@@ -192,8 +192,6 @@ func (s *Server) SetConfig(cfg *config.Config, rootDir string) {
 
 func cloneConfig(cfg config.Config) config.Config {
 	cfg.Gateway = cloneGatewayConfig(cfg.Gateway)
-	cfg.Policy.BlacklistWxids = append([]string(nil), cfg.Policy.BlacklistWxids...)
-	cfg.Policy.WhitelistGroups = append([]string(nil), cfg.Policy.WhitelistGroups...)
 	cfg.Endpoints = append([]config.EndpointConfig(nil), cfg.Endpoints...)
 	return cfg
 }
@@ -578,19 +576,48 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// rememberIncomingMessage keeps the native routing and revoke identifiers for
+// OneBot delete_msg requests, whose standard payload only contains message_id.
+func (s *Server) rememberIncomingMessage(event client.Event, selfID string) {
+	if s.idMapper == nil || event.Event != "recvMsg" {
+		return
+	}
+	fields := rawObject(event.Data)
+	nativeMessageID := firstRawIdentifier(fields, "msg_id", "message_id", "sequence")
+	if nativeMessageID == "" {
+		return
+	}
+	groupID := firstRawIdentifier(fields, "from_wxid", "group_id", "group_wxid", "receiver", "chat_id")
+	if !strings.HasSuffix(groupID, "@chatroom") {
+		groupID = firstRawIdentifier(fields, "group_id", "group_wxid", "receiver", "chat_id")
+	}
+	toUser := groupID
+	if !strings.HasSuffix(groupID, "@chatroom") {
+		toUser = firstRawIdentifier(fields, "chat_id", "from_wxid", "receiver", "user_id", "wxid")
+		if toUser == selfID {
+			toUser = firstRawIdentifier(fields, "final_from_wxid", "sender_wxid", "sender_id", "user_id", "wxid")
+		}
+	}
+	clientMsgID := firstRawIdentifier(fields, "client_msg_id", "clientMsgId")
+	if clientMsgID == "" {
+		clientMsgID = nativeMessageID
+	}
+	s.idMapper.rememberRevokeMessage(nativeMessageID, revokeMessageContext{
+		ToUser:      toUser,
+		ClientMsgID: clientMsgID,
+		SvrMsgID:    firstRawIdentifier(fields, "svr_msg_id", "server_msg_id", "svrMsgId"),
+		CreateTime:  firstRawIdentifier(fields, "create_time", "createTime"),
+	})
+}
+
 // Publish is nonblocking; slow WebSocket consumers are disconnected instead of
 // retaining unbounded events or stalling the native bridge's receive loop.
 func (s *Server) Publish(event client.Event) {
 	s.recvCount.Add(1)
 	cfg := s.currentConfig()
-	if !eventAllowedByPolicy(event, cfg.Policy.BlacklistWxids, cfg.Policy.WhitelistGroups) {
-		return
-	}
 	switch event.Event {
 	case "friendReq":
-		if request, ok := s.cacheFriendRequest(event); ok && cfg.Policy.AutoAgreeFriend {
-			go s.autoAgreeFriend(request)
-		}
+		s.cacheFriendRequest(event)
 	case "systemMsg", "recvMsg":
 		if wxid, matched := friendAddedSystemMessage(event, currentSelfID(s)); matched {
 			s.publishFriendAdded(wxid)
@@ -600,6 +627,7 @@ func (s *Server) Publish(event client.Event) {
 		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	selfID := currentSelfID(s)
+	s.rememberIncomingMessage(event, selfID)
 	payload, err := marshalWebsocketEvent(event, selfID)
 	if err == nil && cfg.Gateway.QQCompat && s.idMapper != nil {
 		payload, err = json.Marshal(s.idMapper.TranslateEvent(formatOneBotEvent(event, selfID)))

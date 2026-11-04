@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"sync"
 	"testing"
@@ -84,6 +85,37 @@ func TestIDMapperAllocationsAreConcurrentAndUnique(t *testing.T) {
 			t.Fatalf("duplicate numeric user ID %d", id)
 		}
 		unique[id] = struct{}{}
+	}
+}
+
+func TestIDMapperTranslatesGroupActionListsAndChatroomNames(t *testing.T) {
+	mapper := newIDMapper()
+	userID := mapper.UserWxidToNum("wxid_member")
+	groupID := mapper.GroupChatroomToNum("room@chatroom")
+	raw := json.RawMessage(fmt.Sprintf(`{"group_id":%d,"user_list":[%d]}`, groupID, userID))
+	translated := mapper.TranslateActionParams("add_members", raw)
+	var params map[string]any
+	if err := json.Unmarshal(translated, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params["group_id"] != "room@chatroom" || !reflect.DeepEqual(params["user_list"], []any{"wxid_member"}) {
+		t.Fatalf("group action IDs were not reversed: %#v", params)
+	}
+
+	commaList := json.RawMessage(fmt.Sprintf(`{"member_list":"%d"}`, userID))
+	translated = mapper.TranslateActionParams("create_group", commaList)
+	if err := json.Unmarshal(translated, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params["member_list"] != "wxid_member" {
+		t.Fatalf("comma-delimited member ID was not reversed: %#v", params)
+	}
+
+	response := mapper.TranslateActionResponseData("create_group", map[string]any{
+		"chatroom_name": "room@chatroom",
+	}).(map[string]any)
+	if response["chatroom_name"] != groupID {
+		t.Fatalf("chatroom_name was not mapped to numeric group ID: %#v", response)
 	}
 }
 

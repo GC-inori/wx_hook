@@ -75,6 +75,40 @@ func TestFormatOneBotEventInjectsMentionSegments(t *testing.T) {
 	}
 }
 
+func TestFormatHongBaoEventIncludesRedPacketNoticeFields(t *testing.T) {
+	data := json.RawMessage(`{"title":"新年快乐","send_id":"send-1","native_url":"wxpay://hongbao","sender":"wxid_sender","receiver":"room@chatroom","sub_type":"opened","amount":128,"receiveId":"rid-1"}`)
+	event := formatOneBotEvent(client.Event{Event: "hongBao", Data: data}, "wxid_bot")
+	for key, want := range map[string]any{
+		"post_type": "notice", "notice_type": "wx_red_packet", "title": "新年快乐",
+		"send_id": "send-1", "native_url": "wxpay://hongbao", "user_id": "wxid_sender",
+		"group_id": "room@chatroom", "sub_type": "opened", "amount": "128", "receive_id": "rid-1",
+	} {
+		if got := event[key]; got != want {
+			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
+func TestFormatTransPayEventIncludesConfirmationFields(t *testing.T) {
+	data := json.RawMessage(`{"transfer_id":"tr-1","transaction_id":"tx-1","amount":"￥1.00","pay_subtype":"1","invalid_time":"1730000000","transfer_attach":"opaque","sender":"wxid_sender"}`)
+	event := formatOneBotEvent(client.Event{Event: "transPay", Data: data}, "wxid_bot")
+	for key, want := range map[string]any{
+		"post_type":       "notice",
+		"notice_type":     "wx_trans_pay",
+		"transfer_id":     "tr-1",
+		"transaction_id":  "tx-1",
+		"amount":          "￥1.00",
+		"pay_subtype":     "1",
+		"invalid_time":    "1730000000",
+		"transfer_attach": "opaque",
+		"user_id":         "wxid_sender",
+	} {
+		if got := event[key]; got != want {
+			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
 func TestParseMentionTargetsMapsEveryone(t *testing.T) {
 	fields := map[string]json.RawMessage{
 		"atuserlist": json.RawMessage(`"<atuserlist>wxid_test,announcement@all,notify@all</atuserlist>"`),

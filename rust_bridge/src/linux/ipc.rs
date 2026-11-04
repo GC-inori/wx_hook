@@ -432,80 +432,224 @@ fn process_request(request: IpcRequest) -> IpcResponse {
             }
             Err(error) => make_response(id, 1, &error, None),
         },
-        "agree_friend_req" | "agreeFriendReq" => match parse_agree_friend_req(request.data.as_ref()) {
-            Ok((wxid, ticket, encryptusername, scene, remark)) => {
-                match super::sender::agree_friend_req(&wxid, &ticket, &encryptusername, scene, &remark) {
+        "agree_friend_req" | "agreeFriendReq" => {
+            match parse_agree_friend_req(request.data.as_ref()) {
+                Ok((wxid, ticket, encryptusername, scene, remark)) => {
+                    match super::sender::agree_friend_req(
+                        &wxid,
+                        &ticket,
+                        &encryptusername,
+                        scene,
+                        &remark,
+                    ) {
+                        Ok(()) => {
+                            make_response(id, 0, "", Some(json!({ "agreed": true, "wxid": wxid })))
+                        }
+                        Err(error) => make_response(id, 1, &error, None),
+                    }
+                }
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
+        "confirm_trans" | "confirmTrans" => match parse_confirm_transfer(request.data.as_ref()) {
+            Ok((trans_id, invalid_time, transfer_attach)) => {
+                match super::sender::confirm_transfer(&trans_id, invalid_time, &transfer_attach) {
                     Ok(()) => make_response(
                         id,
                         0,
                         "",
-                        Some(json!({ "agreed": true, "wxid": wxid })),
+                        Some(json!({ "confirmed": true, "trans_id": trans_id })),
                     ),
                     Err(error) => make_response(id, 1, &error, None),
                 }
             }
             Err(error) => make_response(id, 1, &error, None),
         },
-        "revoke_my_msg"
-        | "revokeMyMsg"
-        | "revoke_msg"
-        | "get_friend_list"
-        | "getFriendList"
-        | "get_group_list"
-        | "getGroupList"
-        | "get_member_list"
-        | "getMemberList"
-        | "get_public_list"
-        | "getPublicList"
-        | "get_label_list"
-        | "getLabelList"
-        | "query_obj"
-        | "queryObj"
-        | "query_group"
-        | "queryGroup"
-        | "create_group"
-        | "createGroup"
-        | "add_members"
-        | "addMembers"
-        | "invite_members"
-        | "inviteMembers"
-        | "del_members"
-        | "delMembers"
-        | "quit_group"
-        | "quitGroup"
-        | "edit_self_member_nick"
-        | "editSelfMemberNick"
-        | "del_friend"
-        | "delFriend"
-        | "edit_obj_remark"
-        | "editObjRemark"
-        | "edit_remark"
-        | "confirm_trans"
-        | "confirmTrans"
-        | "return_trans"
-        | "returnTrans"
-        | "set_read_status"
-        | "setReadStatus"
-        | "decrypt_image"
-        | "decryptImage"
-        | "kill_wechat"
-        | "killWeChat"
-        | "edit_version"
-        | "editVersion"
-        | "get_login_status"
-        | "getLoginStatus"
-        | "get_login_qr_code"
-        | "getLoginQrCode"
-        | "set_download_image"
-        | "setDownloadImage"
-        | "get_auth_info"
-        | "getAuthInfo"
-        | "open_browser"
-        | "openBrowser"
-        | "run_cloud_function"
-        | "runCloudFunction"
-        | "auth_cami"
-        | "authCami" => make_response(
+        "receiveHongBao" | "receive_hong_bao" => {
+            match parse_receive_hongbao(request.data.as_ref()) {
+                Ok((send_id, channel_id, native_url, session_wxid, in_way)) => {
+                    match super::sender::receive_hongbao(
+                        &send_id,
+                        &channel_id,
+                        &native_url,
+                        &session_wxid,
+                        in_way,
+                    ) {
+                        Ok(response) => match serde_json::from_str::<Value>(&response) {
+                            Ok(value) => make_response(id, 0, "", Some(value)),
+                            Err(error) => make_response(
+                                id,
+                                1,
+                                &format!("invalid HongBaoRes JSON: {error}"),
+                                None,
+                            ),
+                        },
+                        Err(error) => make_response(id, 1, &error, None),
+                    }
+                }
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
+        "openHongBao" | "open_hong_bao" => match parse_open_hongbao(request.data.as_ref()) {
+            Ok((channel_id, native_url, session_wxid, timing_identifier, nick_name)) => {
+                match super::sender::open_hongbao(
+                    &channel_id,
+                    &native_url,
+                    &session_wxid,
+                    &timing_identifier,
+                    &nick_name,
+                ) {
+                    Ok(response) => match serde_json::from_str::<Value>(&response) {
+                        Ok(value) => make_response(id, 0, "", Some(value)),
+                        Err(error) => {
+                            make_response(id, 1, &format!("invalid HongBaoRes JSON: {error}"), None)
+                        }
+                    },
+                    Err(error) => make_response(id, 1, &error, None),
+                }
+            }
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        "delete_friend" | "del_friend" | "delFriend" => {
+            match parse_delete_friend(request.data.as_ref()) {
+                Ok(wxid) => match super::sender::del_friend(&wxid) {
+                    Ok(()) => make_response(
+                        id,
+                        0,
+                        "success",
+                        Some(json!({ "deleted": true, "wxid": wxid })),
+                    ),
+                    Err(error) => make_response(id, 1, &error, None),
+                },
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
+        "revoke_my_msg" | "revokeMyMsg" | "revoke_msg" => {
+            match parse_revoke_msg(request.data.as_ref()) {
+                Ok((to_user, client_msg_id, svr_msg_id, create_time)) => {
+                    match super::sender::revoke_msg(
+                        &to_user,
+                        &client_msg_id,
+                        svr_msg_id,
+                        create_time,
+                    ) {
+                        Ok(()) => make_response(
+                            id,
+                            0,
+                            "success",
+                            Some(json!({
+                                "revoked": true,
+                                "to_user": to_user,
+                                "client_msg_id": client_msg_id,
+                                "svr_msg_id": svr_msg_id,
+                            })),
+                        ),
+                        Err(error) => make_response(id, 1, &error, None),
+                    }
+                }
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
+        "get_member_list" | "getMemberList" => match parse_chatroom_name(request.data.as_ref()) {
+            Ok(room) => match super::sender::get_member_list(&room) {
+                Ok(members) => make_response(id, 0, "success", Some(members)),
+                Err(error) => make_response(id, 1, &error, None),
+            },
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        "get_group_list" | "getGroupList" => match super::sender::get_group_list() {
+            Ok(groups) => make_response(id, 0, "success", Some(groups)),
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        "get_friend_list" | "getFriendList" => match super::sender::get_friend_list() {
+            Ok(friends) => make_response(id, 0, "success", Some(friends)),
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        "create_group" | "createGroup" => match parse_create_group(request.data.as_ref()) {
+            Ok((members, topic)) => match super::sender::create_group(&members, &topic) {
+                Ok(room_id) => make_response(
+                    id,
+                    0,
+                    "success",
+                    Some(json!({ "created": true, "chatroom_name": room_id })),
+                ),
+                Err(error) => make_response(id, 1, &error, None),
+            },
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        "add_members" | "addMembers" | "invite_members" | "inviteMembers" => {
+            match parse_chatroom_members(request.data.as_ref()) {
+                Ok((room, members)) => match super::sender::add_members(&room, &members) {
+                    Ok(()) => make_response(
+                        id,
+                        0,
+                        "success",
+                        Some(json!({ "added": true, "chatroom_name": room })),
+                    ),
+                    Err(error) => make_response(id, 1, &error, None),
+                },
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
+        "del_members" | "delMembers" => match parse_chatroom_members(request.data.as_ref()) {
+            Ok((room, members)) => match super::sender::del_members(&room, &members) {
+                Ok(()) => make_response(
+                    id,
+                    0,
+                    "success",
+                    Some(json!({ "deleted": true, "chatroom_name": room })),
+                ),
+                Err(error) => make_response(id, 1, &error, None),
+            },
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        "quit_group" | "quitGroup" => match parse_chatroom_name(request.data.as_ref()) {
+            Ok(room) => match super::sender::quit_group(&room) {
+                Ok(()) => make_response(
+                    id,
+                    0,
+                    "success",
+                    Some(json!({ "quit": true, "chatroom_name": room })),
+                ),
+                Err(error) => make_response(id, 1, &error, None),
+            },
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        "edit_self_member_nick" | "editSelfMemberNick" => {
+            match parse_edit_self_member_nick(request.data.as_ref()) {
+                Ok((room, nick)) => match super::sender::edit_self_member_nick(&room, &nick) {
+                    Ok(()) => make_response(
+                        id,
+                        0,
+                        "success",
+                        Some(json!({ "updated": true, "chatroom_name": room, "nick": nick })),
+                    ),
+                    Err(error) => make_response(id, 1, &error, None),
+                },
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
+        "edit_obj_remark" | "editObjRemark" | "edit_remark" => {
+            match parse_edit_obj_remark(request.data.as_ref()) {
+                Ok((wxid, remark)) => match super::sender::edit_obj_remark(&wxid, &remark) {
+                    Ok(()) => make_response(
+                        id,
+                        0,
+                        "success",
+                        Some(json!({ "updated": true, "wxid": wxid, "remark": remark })),
+                    ),
+                    Err(error) => make_response(id, 1, &error, None),
+                },
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
+        "get_public_list" | "getPublicList" | "get_label_list" | "getLabelList" | "query_obj"
+        | "queryObj" | "query_group" | "queryGroup" | "return_trans" | "returnTrans"
+        | "set_read_status" | "setReadStatus" | "decrypt_image" | "decryptImage"
+        | "kill_wechat" | "killWeChat" | "edit_version" | "editVersion" | "get_login_status"
+        | "getLoginStatus" | "get_login_qr_code" | "getLoginQrCode" | "set_download_image"
+        | "setDownloadImage" | "get_auth_info" | "getAuthInfo" | "open_browser" | "openBrowser"
+        | "run_cloud_function" | "runCloudFunction" | "auth_cami" | "authCami" => make_response(
             id,
             501,
             "Not implemented / In progress",
@@ -564,6 +708,251 @@ fn parse_agree_friend_req(
         .unwrap_or_default()
         .to_owned();
     Ok((wxid, ticket, encryptusername, scene, remark))
+}
+
+fn parse_revoke_msg(data: Option<&Value>) -> Result<(String, String, u64, u32), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "revoke_msg requires a data object".to_owned())?;
+    let to_user = ["to_user", "session", "group_id", "wxid", "user_id"]
+        .iter()
+        .find_map(|key| {
+            data.get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .ok_or_else(|| "data.to_user / session / group_id / wxid is required".to_owned())?
+        .to_owned();
+    let client_msg_id = ["client_msg_id", "msg_id", "message_id", "clientMsgId"]
+        .iter()
+        .find_map(|key| match data.get(*key) {
+            Some(Value::String(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
+            Some(Value::Number(value)) => Some(value.to_string()),
+            _ => None,
+        })
+        .ok_or_else(|| "data.client_msg_id / msg_id is required".to_owned())?;
+    let svr_msg_id = parse_optional_u64(
+        data.get("svr_msg_id").or_else(|| data.get("svrMsgId")),
+        "svr_msg_id",
+    )?;
+    let create_time = parse_optional_u64(
+        data.get("create_time").or_else(|| data.get("createTime")),
+        "create_time",
+    )?;
+    let create_time = u32::try_from(create_time)
+        .map_err(|_| "data.create_time must be a 32-bit unsigned integer".to_owned())?;
+    Ok((to_user, client_msg_id, svr_msg_id, create_time))
+}
+
+fn parse_optional_u64(value: Option<&Value>, name: &str) -> Result<u64, String> {
+    match value {
+        None | Some(Value::Null) => Ok(0),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .ok_or_else(|| format!("data.{name} must be a non-negative integer")),
+        Some(Value::String(text)) => text
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| format!("data.{name} must be a non-negative integer")),
+        Some(_) => Err(format!("data.{name} must be a non-negative integer")),
+    }
+}
+
+fn parse_delete_friend(data: Option<&Value>) -> Result<String, String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "delete_friend requires a data object".to_owned())?;
+    let wxid = ["wxid", "user_id"]
+        .iter()
+        .find_map(|key| {
+            data.get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .ok_or_else(|| "data.wxid / data.user_id is required".to_owned())?
+        .to_owned();
+    Ok(wxid)
+}
+
+fn parse_chatroom_name(data: Option<&Value>) -> Result<String, String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "chatroom action requires a data object".to_owned())?;
+    Ok(required_string(data, &["chatroom_name", "group_id"])?
+        .trim()
+        .to_owned())
+}
+
+fn parse_native_string_list(data: &Value, keys: &[&str]) -> Result<Vec<String>, String> {
+    let (field, value) = keys
+        .iter()
+        .find_map(|key| data.get(*key).map(|value| (*key, value)))
+        .ok_or_else(|| format!("data requires one of: {}", keys.join(" / ")))?;
+    let values = if let Some(value) = value.as_str() {
+        value.split(',').map(str::to_owned).collect::<Vec<_>>()
+    } else if let Some(values) = value.as_array() {
+        values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("data.{field} must contain only strings"))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        return Err(format!("data.{field} must be a string or string array"));
+    };
+    let values = values
+        .into_iter()
+        .map(|value| value.trim().to_owned())
+        .collect::<Vec<_>>();
+    if values.is_empty() || values.iter().any(String::is_empty) {
+        return Err(format!("data.{field} must contain non-empty strings"));
+    }
+    Ok(values)
+}
+
+fn parse_chatroom_members(data: Option<&Value>) -> Result<(String, Vec<String>), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "chatroom member action requires a data object".to_owned())?;
+    let room = required_string(data, &["chatroom_name", "group_id"])?
+        .trim()
+        .to_owned();
+    let members = parse_native_string_list(data, &["user_list", "member_list"])?;
+    Ok((room, members))
+}
+
+fn parse_create_group(data: Option<&Value>) -> Result<(Vec<String>, String), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "create_group requires a data object".to_owned())?;
+    let members = parse_native_string_list(data, &["user_list", "member_list", "users"])?;
+    let topic = optional_string(data, &["topic", "name"])
+        .unwrap_or_default()
+        .to_owned();
+    Ok((members, topic))
+}
+
+fn parse_edit_self_member_nick(data: Option<&Value>) -> Result<(String, String), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "edit_self_member_nick requires a data object".to_owned())?;
+    let room = required_string(data, &["chatroom_name", "group_id"])?
+        .trim()
+        .to_owned();
+    let nick = required_string(data, &["nick", "nickname"])?.to_owned();
+    Ok((room, nick))
+}
+
+fn parse_edit_obj_remark(data: Option<&Value>) -> Result<(String, String), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "edit_obj_remark requires a data object".to_owned())?;
+    let wxid = required_string(data, &["wxid", "user_id"])?
+        .trim()
+        .to_owned();
+    let remark = data
+        .get("remark")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "data.remark must be a string".to_owned())?
+        .to_owned();
+    Ok((wxid, remark))
+}
+
+fn parse_receive_hongbao(
+    data: Option<&Value>,
+) -> Result<(String, String, String, String, u32), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "receiveHongBao requires a data object".to_owned())?;
+    let send_id = required_string(data, &["send_id", "sendId"])?.to_owned();
+    let channel_id = optional_string(data, &["channel_id", "channelId"])
+        .unwrap_or("1")
+        .to_owned();
+    let native_url = required_string(data, &["native_url", "nativeUrl"])?.to_owned();
+    let session_wxid =
+        required_string(data, &["session_wxid", "sessionUserName", "sessionWxid"])?.to_owned();
+    let in_way = parse_u32_value(data.get("in_way").or_else(|| data.get("inWay")), "in_way")?;
+    if in_way > 1 {
+        return Err("data.in_way must be 0 (group) or 1 (private)".to_owned());
+    }
+    Ok((send_id, channel_id, native_url, session_wxid, in_way))
+}
+
+fn parse_open_hongbao(
+    data: Option<&Value>,
+) -> Result<(String, String, String, String, String), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "openHongBao requires a data object".to_owned())?;
+    let channel_id = optional_string(data, &["channel_id", "channelId"])
+        .unwrap_or("1")
+        .to_owned();
+    let native_url = required_string(data, &["native_url", "nativeUrl"])?.to_owned();
+    let session_wxid =
+        required_string(data, &["session_wxid", "sessionUserName", "sessionWxid"])?.to_owned();
+    let timing_identifier =
+        required_string(data, &["timing_identifier", "timingIdentifier"])?.to_owned();
+    let nick_name = optional_string(data, &["nick_name", "nickName"])
+        .unwrap_or_default()
+        .to_owned();
+    Ok((
+        channel_id,
+        native_url,
+        session_wxid,
+        timing_identifier,
+        nick_name,
+    ))
+}
+
+fn optional_string<'a>(data: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| {
+        data.get(*key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+    })
+}
+
+fn parse_u32_value(value: Option<&Value>, name: &str) -> Result<u32, String> {
+    match value {
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .and_then(|number| u32::try_from(number).ok())
+            .ok_or_else(|| format!("data.{name} must be a non-negative 32-bit integer")),
+        Some(Value::String(text)) => text
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("data.{name} must be a non-negative 32-bit integer")),
+        _ => Err(format!("data.{name} must be a non-negative 32-bit integer")),
+    }
+}
+
+fn parse_confirm_transfer(data: Option<&Value>) -> Result<(String, u32, String), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "confirm_trans requires a data object".to_owned())?;
+    let trans_id = required_string(data, &["trans_id", "transfer_id"])?.to_owned();
+    let invalid_time = match data.get("invalid_time") {
+        Some(Value::Number(value)) => value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| "data.invalid_time must be a non-negative 32-bit integer".to_owned())?,
+        Some(Value::String(value)) => value
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| "data.invalid_time must be a non-negative 32-bit integer".to_owned())?,
+        _ => return Err("data.invalid_time must be a non-negative 32-bit integer".to_owned()),
+    };
+    let transfer_attach = match data.get("transfer_attach") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(value)) => value.clone(),
+        Some(_) => return Err("data.transfer_attach must be a string".to_owned()),
+    };
+    Ok((trans_id, invalid_time, transfer_attach))
 }
 
 fn parse_at_list(data: &Value) -> Result<Option<String>, String> {
@@ -887,6 +1276,68 @@ mod tests {
     }
 
     #[test]
+    fn delete_friend_parser_accepts_wxid_and_user_id() {
+        assert_eq!(
+            parse_delete_friend(Some(&json!({"wxid": "wxid_a"}))).unwrap(),
+            "wxid_a"
+        );
+        assert_eq!(
+            parse_delete_friend(Some(&json!({"wxid": "", "user_id": "wxid_b"}))).unwrap(),
+            "wxid_b"
+        );
+        assert!(parse_delete_friend(Some(&json!({"wxid": " "}))).is_err());
+        assert!(parse_delete_friend(Some(&json!([]))).is_err());
+    }
+
+    #[test]
+    fn revoke_parser_accepts_native_aliases_and_validates_numeric_fields() {
+        assert_eq!(
+            parse_revoke_msg(Some(&json!({
+                "session": "room@chatroom",
+                "msg_id": 314,
+                "svr_msg_id": "9223372036854775807",
+                "create_time": "1730000000"
+            })))
+            .unwrap(),
+            (
+                "room@chatroom".to_owned(),
+                "314".to_owned(),
+                9_223_372_036_854_775_807,
+                1_730_000_000
+            )
+        );
+        assert_eq!(
+            parse_revoke_msg(Some(&json!({
+                "to_user": "wxid_a",
+                "client_msg_id": "client-1",
+                "svr_msg_id": 42
+            })))
+            .unwrap(),
+            ("wxid_a".to_owned(), "client-1".to_owned(), 42, 0)
+        );
+        for invalid in [
+            json!({"msg_id": "client-1"}),
+            json!({"wxid": "wxid_a", "msg_id": "client-1", "svr_msg_id": -1}),
+            json!({"wxid": "wxid_a", "msg_id": "client-1", "create_time": 4294967296u64}),
+        ] {
+            assert!(parse_revoke_msg(Some(&invalid)).is_err(), "{invalid}");
+        }
+        for action in [
+            "revoke_msg",
+            "revoke_my_msg",
+            "revokeMyMsg",
+            "get_member_list",
+            "getMemberList",
+            "get_group_list",
+            "getGroupList",
+            "get_friend_list",
+            "getFriendList",
+        ] {
+            assert_ne!(call(action, None).code, 501, "{action}");
+        }
+    }
+
+    #[test]
     fn responses_include_all_contract_fields_and_status_mapping() {
         for (status, code, msg) in [
             (0, 200, "操作成功"),
@@ -912,26 +1363,80 @@ mod tests {
     }
 
     #[test]
+    fn parses_hongbao_parameters_and_aliases() {
+        let (send_id, channel_id, native_url, session, in_way) = parse_receive_hongbao(Some(
+            &json!({"sendId":"send-1", "nativeUrl":"wxpay://hongbao", "sessionUserName":"room@chatroom", "inWay":"0"}),
+        )).unwrap();
+        assert_eq!(
+            (
+                send_id.as_str(),
+                channel_id.as_str(),
+                native_url.as_str(),
+                session.as_str(),
+                in_way
+            ),
+            ("send-1", "1", "wxpay://hongbao", "room@chatroom", 0)
+        );
+
+        let (channel, native_url, session, timing, nickname) = parse_open_hongbao(Some(
+            &json!({"channel_id":"8", "native_url":"wxpay://hongbao", "session_wxid":"wxid_1", "timing_identifier":"token", "nick_name":"Bot"}),
+        )).unwrap();
+        assert_eq!(
+            (
+                channel.as_str(),
+                native_url.as_str(),
+                session.as_str(),
+                timing.as_str(),
+                nickname.as_str()
+            ),
+            ("8", "wxpay://hongbao", "wxid_1", "token", "Bot")
+        );
+
+        for data in [
+            json!({"send_id":"send-1", "native_url":"u", "session_wxid":"wxid_1", "in_way":2}),
+            json!({"send_id":"send-1", "native_url":"u", "session_wxid":"wxid_1", "in_way":"bad"}),
+        ] {
+            assert!(parse_receive_hongbao(Some(&data)).is_err(), "{data}");
+        }
+        assert!(parse_open_hongbao(Some(&json!({"native_url":"u"}))).is_err());
+    }
+
+    #[test]
+    fn parses_confirm_transfer_ids_and_invalid_times() {
+        let (trans_id, invalid_time, transfer_attach) = parse_confirm_transfer(Some(
+            &json!({"trans_id": "tr-1", "invalid_time": "1730000000", "transfer_attach": "opaque"}),
+        ))
+        .unwrap();
+        assert_eq!(trans_id, "tr-1");
+        assert_eq!(invalid_time, 1_730_000_000);
+        assert_eq!(transfer_attach, "opaque");
+
+        let (transfer_id, invalid_time, transfer_attach) =
+            parse_confirm_transfer(Some(&json!({"transfer_id": "tr-2", "invalid_time": 42})))
+                .unwrap();
+        assert_eq!(transfer_id, "tr-2");
+        assert_eq!(invalid_time, 42);
+        assert!(transfer_attach.is_empty());
+
+        for data in [
+            json!({"trans_id": "tr-1"}),
+            json!({"trans_id": "", "invalid_time": 1}),
+            json!({"trans_id": "tr-1", "invalid_time": -1}),
+            json!({"trans_id": "tr-1", "invalid_time": 4294967296u64}),
+            json!({"trans_id": "tr-1", "invalid_time": "not-a-time"}),
+            json!({"trans_id": "tr-1", "invalid_time": 1, "transfer_attach": 1}),
+        ] {
+            assert!(parse_confirm_transfer(Some(&data)).is_err(), "{data}");
+        }
+    }
+
+    #[test]
     fn all_in_progress_actions_and_aliases_return_clean_501() {
         let pairs = [
-            ("revoke_my_msg", "revokeMyMsg"),
-            ("get_friend_list", "getFriendList"),
-            ("get_group_list", "getGroupList"),
-            ("get_member_list", "getMemberList"),
             ("get_public_list", "getPublicList"),
             ("get_label_list", "getLabelList"),
             ("query_obj", "queryObj"),
             ("query_group", "queryGroup"),
-            ("create_group", "createGroup"),
-            ("add_members", "addMembers"),
-            ("invite_members", "inviteMembers"),
-            ("del_members", "delMembers"),
-            ("quit_group", "quitGroup"),
-            ("edit_self_member_nick", "editSelfMemberNick"),
-            ("agree_friend_req", "agreeFriendReq"),
-            ("del_friend", "delFriend"),
-            ("edit_obj_remark", "editObjRemark"),
-            ("confirm_trans", "confirmTrans"),
             ("return_trans", "returnTrans"),
             ("set_read_status", "setReadStatus"),
             ("decrypt_image", "decryptImage"),
@@ -981,6 +1486,29 @@ mod tests {
             "get_member_nick",
             "getMemberNick",
             "get_contact_name",
+            "agree_friend_req",
+            "agreeFriendReq",
+            "confirm_trans",
+            "confirmTrans",
+            "receive_hong_bao",
+            "receiveHongBao",
+            "open_hong_bao",
+            "openHongBao",
+            "create_group",
+            "createGroup",
+            "add_members",
+            "addMembers",
+            "invite_members",
+            "inviteMembers",
+            "del_members",
+            "delMembers",
+            "quit_group",
+            "quitGroup",
+            "edit_self_member_nick",
+            "editSelfMemberNick",
+            "edit_obj_remark",
+            "editObjRemark",
+            "edit_remark",
         ] {
             assert_eq!(call(action, None).code, 400, "{action}");
         }
@@ -998,6 +1526,47 @@ mod tests {
             data: None,
         });
         assert_eq!(response.code, 200);
+    }
+
+    #[test]
+    fn parses_group_management_aliases_and_rejects_invalid_member_lists() {
+        let (members, topic) = parse_create_group(Some(&json!({
+            "users": ["wxid_a", "wxid_b"],
+            "name": "team"
+        })))
+        .unwrap();
+        assert_eq!(members, ["wxid_a", "wxid_b"]);
+        assert_eq!(topic, "team");
+
+        let (room, members) = parse_chatroom_members(Some(&json!({
+            "group_id": "room@chatroom",
+            "member_list": "wxid_a, wxid_b"
+        })))
+        .unwrap();
+        assert_eq!(room, "room@chatroom");
+        assert_eq!(members, ["wxid_a", "wxid_b"]);
+        assert_eq!(
+            parse_edit_self_member_nick(Some(&json!({
+                "chatroom_name": "room@chatroom",
+                "nickname": "new name"
+            })))
+            .unwrap(),
+            ("room@chatroom".to_owned(), "new name".to_owned())
+        );
+        assert_eq!(
+            parse_edit_obj_remark(Some(&json!({ "user_id": "wxid_a", "remark": "friend" })))
+                .unwrap(),
+            ("wxid_a".to_owned(), "friend".to_owned())
+        );
+
+        for invalid in [
+            json!({"group_id": "room@chatroom", "member_list": []}),
+            json!({"group_id": "room@chatroom", "member_list": ["wxid_a", 7]}),
+            json!({"group_id": "room@chatroom", "member_list": [""]}),
+            json!({"group_id": "room@chatroom", "member_list": ""}),
+        ] {
+            assert!(parse_chatroom_members(Some(&invalid)).is_err(), "{invalid}");
+        }
     }
 
     #[test]

@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
-	"time"
 
 	"wxbot/pkg/client"
-	"wxbot/pkg/config"
 )
 
 func TestSetFriendAddRequestUsesCachedRequestDetails(t *testing.T) {
@@ -45,54 +43,23 @@ func TestSetFriendAddRequestUsesCachedRequestDetails(t *testing.T) {
 	}
 }
 
-func TestAutoAgreeFriendRequestSendsWelcomeAfterSuccess(t *testing.T) {
-	type call struct {
-		action string
-		data   json.RawMessage
-	}
-	calls := make(chan call, 4)
-	server := testServer(t, "en-US", fakeCaller{call: func(_ context.Context, action string, data any) (json.RawMessage, error) {
-		raw, _ := data.(json.RawMessage)
-		calls <- call{action: action, data: raw}
-		return json.RawMessage(`{"ok":true}`), nil
+func TestSetFriendAddRequestRejectDoesNotCallNative(t *testing.T) {
+	called := false
+	server := testServer(t, "en-US", fakeCaller{call: func(context.Context, string, any) (json.RawMessage, error) {
+		called = true
+		return nil, nil
 	}}, "")
-	cfg := config.Config{
-		Gateway: config.GatewayConfig{Locale: "en-US", MaxConnections: 2, RequestTimeoutSec: 2, WSQueueSize: 16, WSPingIntervalSec: 20},
-		Policy: config.PolicyConfig{
-			AutoAgreeFriend: true, FriendWelcomeEnabled: true, FriendWelcomeMessage: "欢迎添加！",
-			RateLimitEnabled: false,
-		},
-	}
-	server.SetConfig(&cfg, t.TempDir())
 	server.Publish(client.Event{
 		Event: "friendReq",
-		Data:  json.RawMessage(`{"applicant":{"wxid":"wxid_new_friend","ticket":"ticket-2","encryptusername":"encrypt-2","scene":"6"}}`),
+		Data:  json.RawMessage(`{"applicant":{"wxid":"wxid_requester","ticket":"ticket-reject"}}`),
 	})
 
-	seenAgree, seenWelcome := false, false
-	deadline := time.After(3 * time.Second)
-	for !seenAgree || !seenWelcome {
-		select {
-		case got := <-calls:
-			var params map[string]any
-			if err := json.Unmarshal(got.data, &params); err != nil {
-				t.Fatal(err)
-			}
-			switch got.action {
-			case "agreeFriendReq":
-				seenAgree = true
-				if params["wxid"] != "wxid_new_friend" || params["ticket"] != "ticket-2" || params["encryptusername"] != "encrypt-2" || params["scene"] != float64(6) {
-					t.Errorf("unexpected auto-agree arguments: %#v", params)
-				}
-			case "sendText":
-				seenWelcome = true
-				if params["target"] != "wxid_new_friend" || params["text"] != "欢迎添加！" {
-					t.Errorf("unexpected welcome message: %#v", params)
-				}
-			}
-		case <-deadline:
-			t.Fatalf("timed out waiting for agree and welcome calls; agree=%v welcome=%v", seenAgree, seenWelcome)
-		}
+	status, response := request(t, server, http.MethodPost, `{"action":"set_friend_add_request","params":{"flag":"ticket-reject","approve":false}}`)
+	if status != http.StatusOK || response.Retcode != 1405 {
+		t.Fatalf("unsupported rejection response: status=%d response=%+v", status, response)
+	}
+	if called {
+		t.Fatal("rejected friend request unexpectedly reached native bridge")
 	}
 }
 

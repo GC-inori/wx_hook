@@ -47,6 +47,10 @@ pub fn get_contact_name(wxid: &str) -> Option<String> {
     None
 }
 
+pub fn get_cached_nickname(wxid: &str) -> Option<String> {
+    get_contact_name(wxid)
+}
+
 /// Safely inspects current logged-in WeChat account (wxid and nickname) from native memory.
 pub fn get_self_account() -> Option<(String, String)> {
     let base = WECHAT_BASE.load(Ordering::Acquire);

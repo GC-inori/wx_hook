@@ -162,6 +162,39 @@ fn parse_xml(xml: &str) -> Option<XmlFields> {
     }
 }
 
+fn percent_decode_query_value(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or_default();
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    decoded.push(byte);
+                    index += 3;
+                    continue;
+                }
+                decoded.push(bytes[index]);
+            }
+            b'+' => decoded.push(b' '),
+            byte => decoded.push(byte),
+        }
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn url_query_value(url: &str, wanted: &str) -> Option<String> {
+    let query = url.split_once('?').map_or(url, |(_, query)| query);
+    let query = query.split('#').next().unwrap_or(query);
+    query
+        .split(['&', ';'])
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| key.eq_ignore_ascii_case(wanted))
+        .map(|(_, value)| percent_decode_query_value(value))
+}
+
 /// Return exactly one public event, retaining the original message fields even
 /// when optional XML is malformed or a system-message subtype is not recognized.
 pub fn classify_message(event: &ReceivedMessageEvent) -> (&'static str, Value) {
@@ -214,12 +247,43 @@ pub fn classify_message(event: &ReceivedMessageEvent) -> (&'static str, Value) {
                 data["transaction_id"] = json!(xml.value("wcpayinfo/transcationid"));
                 data["amount"] = json!(xml.value("wcpayinfo/feedesc"));
                 data["pay_subtype"] = json!(xml.value("wcpayinfo/paysubtype"));
+                data["invalid_time"] = json!(xml.value("wcpayinfo/invalidtime"));
+                data["transfer_attach"] = json!(xml.value("wcpayinfo/transferattach"));
                 "transPay"
             }
             "2001" => {
-                // Type 2001 also carries red packets. Require collection fields
-                // rather than mislabelling every red packet as a QR payment.
-                if xml.value("wcpayinfo/receiver_title").contains("收款")
+                let native_url = xml.value("wcpayinfo/nativeurl");
+                let sender_title = {
+                    let value = xml.value("wcpayinfo/sendertitle");
+                    if value.is_empty() {
+                        xml.value("wcpayinfo/sender_title")
+                    } else {
+                        value
+                    }
+                };
+                let receiver_title = {
+                    let value = xml.value("wcpayinfo/receivertitle");
+                    if value.is_empty() {
+                        xml.value("wcpayinfo/receiver_title")
+                    } else {
+                        value
+                    }
+                };
+                let is_red_packet = !receiver_title.contains("收款")
+                    && (native_url.to_ascii_lowercase().contains("hongbao")
+                        || receiver_title.contains("红包")
+                        || (!sender_title.is_empty() && !sender_title.contains("收款")));
+                if is_red_packet {
+                    data["native_url"] = json!(native_url);
+                    data["title"] = json!(sender_title);
+                    data["pay_msg_id"] = json!(xml.value("wcpayinfo/paymsgid"));
+                    data["send_id"] =
+                        json!(url_query_value(&native_url, "sendid").unwrap_or_default());
+                    data["channel_id"] =
+                        json!(url_query_value(&native_url, "channelid")
+                            .unwrap_or_else(|| "1".to_owned()));
+                    "hongBao"
+                } else if receiver_title.contains("收款")
                     || !xml.value("wcpayinfo/paymsgid").is_empty()
                     || !xml.value("wcpayinfo/outtradeno").is_empty()
                 {
@@ -338,14 +402,44 @@ mod tests {
     }
 
     #[test]
+    fn red_packets_are_structured_without_misclassifying_qr_payments() {
+        let red_packet = "<msg><appmsg><type>2001</type><wcpayinfo><nativeurl>wxpay://c2c/hongbao?sendid=send-123&amp;channelid=7</nativeurl><sendertitle>新年快乐</sendertitle><paymsgid>pay-9</paymsgid></wcpayinfo></appmsg></msg>";
+        let (name, data) = classify_message(&event(49, red_packet));
+        assert_eq!(name, "hongBao");
+        assert_eq!(
+            data["native_url"],
+            "wxpay://c2c/hongbao?sendid=send-123&channelid=7"
+        );
+        assert_eq!(data["title"], "新年快乐");
+        assert_eq!(data["pay_msg_id"], "pay-9");
+        assert_eq!(data["send_id"], "send-123");
+        assert_eq!(data["channel_id"], "7");
+
+        let defaults = "<msg><appmsg><type>2001</type><wcpayinfo><nativeurl>wxpay://hongbao?sendid=private</nativeurl><receivertitle>领取红包</receivertitle></wcpayinfo></appmsg></msg>";
+        let (name, data) = classify_message(&event(49, defaults));
+        assert_eq!(name, "hongBao");
+        assert_eq!(data["send_id"], "private");
+        assert_eq!(data["channel_id"], "1");
+
+        let qr = "<msg><appmsg><type>2001</type><wcpayinfo><paysubtype>1</paysubtype><paymsgid>pay-1</paymsgid><sendertitle>收款</sendertitle></wcpayinfo></appmsg></msg>";
+        assert_eq!(classify_message(&event(49, qr)).0, "qrPay");
+        let qr_receiver_title = "<msg><appmsg><type>2001</type><wcpayinfo><receivertitle>收款</receivertitle><sendertitle>扫码付款</sendertitle><paymsgid>pay-2</paymsgid></wcpayinfo></appmsg></msg>";
+        assert_eq!(classify_message(&event(49, qr_receiver_title)).0, "qrPay");
+    }
+
+    #[test]
     fn transfer_and_qr_payments_are_distinguished_from_links_and_red_packets() {
-        let transfer = "<msg><appmsg><type>2000</type><wcpayinfo><transferid>tr-1</transferid><feedesc>￥1.00</feedesc></wcpayinfo></appmsg></msg>";
+        let transfer = "<msg><appmsg><type>2000</type><wcpayinfo><transferid>tr-1</transferid><transcationid>tx-1</transcationid><feedesc>￥1.00</feedesc><paysubtype>1</paysubtype><invalidtime>1730000000</invalidtime><transferattach>attach-data</transferattach></wcpayinfo></appmsg></msg>";
         let (name, data) = classify_message(&event(49, transfer));
         assert_eq!(name, "transPay");
         assert_eq!(data["transfer_id"], "tr-1");
-        let qr = "<msg><appmsg><type>2001</type><wcpayinfo><paysubtype>1</paysubtype><paymsgid>pay-1</paymsgid></wcpayinfo></appmsg></msg>";
+        assert_eq!(data["transaction_id"], "tx-1");
+        assert_eq!(data["amount"], "￥1.00");
+        assert_eq!(data["pay_subtype"], "1");
+        assert_eq!(data["invalid_time"], "1730000000");
+        assert_eq!(data["transfer_attach"], "attach-data");
+        let qr = "<msg><appmsg><type>2001</type><wcpayinfo><paysubtype>1</paysubtype><paymsgid>pay-1</paymsgid><sendertitle>收款</sendertitle></wcpayinfo></appmsg></msg>";
         assert_eq!(classify_message(&event(49, qr)).0, "qrPay");
-        assert_eq!(classify_message(&event(49, "<msg><appmsg><type>2001</type><wcpayinfo><paysubtype>1</paysubtype><sendertitle>红包</sendertitle></wcpayinfo></appmsg></msg>")).0, "recvMsg");
         assert_eq!(
             classify_message(&event(
                 49,

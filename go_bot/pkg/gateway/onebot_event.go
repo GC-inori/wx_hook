@@ -102,10 +102,39 @@ func formatOneBotEvent(event client.Event, selfID string) map[string]any {
 		base["level"] = firstRawString(fields, "level")
 		base["message"] = firstRawString(fields, "message")
 		base["log_time"] = firstRawString(fields, "time")
+	case "hongBao":
+		groupID := firstRawString(fields, "group_id", "group_wxid", "receiver", "from_wxid")
+		if !strings.HasSuffix(groupID, "@chatroom") {
+			groupID = ""
+		}
+		base["post_type"] = "notice"
+		base["notice_type"] = "wx_red_packet"
+		base["title"] = firstRawString(fields, "title")
+		base["send_id"] = firstRawString(fields, "send_id", "sendId")
+		base["native_url"] = firstRawString(fields, "native_url", "nativeUrl")
+		base["user_id"] = firstRawString(fields, "user_id", "final_from_wxid", "sender", "from_wxid")
+		base["group_id"] = groupID
+		if subtype := firstRawString(fields, "sub_type", "subType"); subtype != "" {
+			base["sub_type"] = subtype
+		}
+		if payMsgID := firstRawString(fields, "pay_msg_id", "paymsgid"); payMsgID != "" {
+			base["pay_msg_id"] = payMsgID
+		}
+		if amount := firstRawString(fields, "amount"); amount != "" {
+			base["amount"] = amount
+		}
+		if receiveID := firstRawString(fields, "receive_id", "receiveId"); receiveID != "" {
+			base["receive_id"] = receiveID
+		}
 	case "transPay":
 		base["post_type"] = "notice"
 		base["notice_type"] = "wx_trans_pay"
 		base["amount"] = firstRawString(fields, "amount")
+		base["transfer_id"] = firstRawString(fields, "transfer_id", "trans_id")
+		base["transaction_id"] = firstRawString(fields, "transaction_id")
+		base["invalid_time"] = firstRawString(fields, "invalid_time")
+		base["transfer_attach"] = firstRawString(fields, "transfer_attach")
+		base["pay_subtype"] = firstRawString(fields, "pay_subtype")
 		base["user_id"] = firstRawString(fields, "sender", "user_id")
 	case "qrPay":
 		base["post_type"] = "notice"

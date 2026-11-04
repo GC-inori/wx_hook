@@ -1,9 +1,9 @@
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 type HANDLE = *mut c_void;
 type BOOL = i32;
@@ -196,11 +196,15 @@ fn process_request(req: &IpcRequest) -> IpcResponse {
 
     match req.action.as_str() {
         "send_text" => {
-            let target = req.data.as_ref()
+            let target = req
+                .data
+                .as_ref()
                 .and_then(|d| d.get("target"))
                 .and_then(|t| t.as_str())
                 .unwrap_or_default();
-            let text = req.data.as_ref()
+            let text = req
+                .data
+                .as_ref()
                 .and_then(|d| d.get("text"))
                 .and_then(|t| t.as_str())
                 .unwrap_or_default();
@@ -230,15 +234,21 @@ fn process_request(req: &IpcRequest) -> IpcResponse {
             }
         }
         "send_at_text" => {
-            let target = req.data.as_ref()
+            let target = req
+                .data
+                .as_ref()
                 .and_then(|d| d.get("target"))
                 .and_then(|t| t.as_str())
                 .unwrap_or_default();
-            let text = req.data.as_ref()
+            let text = req
+                .data
+                .as_ref()
                 .and_then(|d| d.get("text"))
                 .and_then(|t| t.as_str())
                 .unwrap_or_default();
-            let members = req.data.as_ref()
+            let members = req
+                .data
+                .as_ref()
                 .and_then(|d| d.get("members"))
                 .and_then(|t| t.as_str())
                 .unwrap_or_default();
@@ -267,24 +277,24 @@ fn process_request(req: &IpcRequest) -> IpcResponse {
                 },
             }
         }
-        "get_account" => {
-            match account::get_current_account(core_base) {
-                Some(acc) => IpcResponse {
-                    id: req.id,
-                    status: 0,
-                    error: String::new(),
-                    data: Some(json!({ "account": acc })),
-                },
-                None => IpcResponse {
-                    id: req.id,
-                    status: 3,
-                    error: "Account not ready or not logged in".to_string(),
-                    data: None,
-                },
-            }
-        }
+        "get_account" => match account::get_current_account(core_base) {
+            Some(acc) => IpcResponse {
+                id: req.id,
+                status: 0,
+                error: String::new(),
+                data: Some(json!({ "account": acc })),
+            },
+            None => IpcResponse {
+                id: req.id,
+                status: 3,
+                error: "Account not ready or not logged in".to_string(),
+                data: None,
+            },
+        },
         "get_contact_name" => {
-            let wxid = req.data.as_ref()
+            let wxid = req
+                .data
+                .as_ref()
                 .and_then(|d| d.get("wxid"))
                 .and_then(|t| t.as_str())
                 .unwrap_or_default();
