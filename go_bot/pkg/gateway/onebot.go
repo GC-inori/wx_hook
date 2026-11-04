@@ -151,8 +151,9 @@ func (s *Server) formatOneBotListResponse(action string, data any) any {
 				name = chatroom
 			}
 			groups = append(groups, map[string]any{
-				"group_id":   s.oneBotGroupID(chatroom),
-				"group_name": name,
+				"group_id":      s.oneBotGroupID(chatroom),
+				"group_name":    name,
+				"chatroom_name": chatroom,
 			})
 		}
 		return groups
@@ -168,6 +169,7 @@ func (s *Server) formatOneBotListResponse(action string, data any) any {
 			friends = append(friends, map[string]any{
 				"user_id":  s.oneBotUserID(wxid),
 				"nickname": firstRawString(fields, "nickname", "name"),
+				"wxid":     wxid,
 			})
 		}
 		return friends
@@ -194,6 +196,7 @@ func (s *Server) formatOneBotListResponse(action string, data any) any {
 			members = append(members, map[string]any{
 				"group_id":          s.oneBotGroupID(chatroom),
 				"user_id":           s.oneBotUserID(wxid),
+				"wxid":              wxid,
 				"nickname":          nickname,
 				"card":              nickname,
 				"role":              role,
@@ -274,8 +277,7 @@ func (s *Server) oneBotGroupID(chatroom string) any {
 }
 
 func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw json.RawMessage) oneBotCallResult {
-	cfg := s.currentGatewayConfig()
-	if s.idMapper != nil && (cfg.QQCompat || action == "delete_msg" || action == "get_group_member_list") {
+	if s.idMapper != nil {
 		raw = s.idMapper.TranslateActionParams(action, raw)
 	}
 	if strings.TrimSpace(rawString(raw)) == "" {

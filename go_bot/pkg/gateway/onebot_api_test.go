@@ -142,6 +142,75 @@ func TestOneBotGroupAndRemarkActionsDispatchToNativeAtomics(t *testing.T) {
 	}
 }
 
+func TestOneBotNumericActionIDsReverseWithoutQQCompat(t *testing.T) {
+	type nativeCall struct {
+		action string
+		params map[string]json.RawMessage
+	}
+	calls := make(chan nativeCall, 7)
+	server := testServer(t, "en-US", fakeCaller{call: func(_ context.Context, action string, data any) (json.RawMessage, error) {
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(data.(json.RawMessage), &params); err != nil {
+			return nil, err
+		}
+		calls <- nativeCall{action: action, params: params}
+		return json.RawMessage(`{"sequence":123}`), nil
+	}}, "")
+	userID := server.idMapper.UserWxidToNum("wxid_target")
+	groupID := server.idMapper.GroupChatroomToNum("room@chatroom")
+	if userID != firstUserID || groupID != firstGroupID {
+		t.Fatalf("unexpected test IDs: user=%d group=%d", userID, groupID)
+	}
+	if server.currentGatewayConfig().QQCompat {
+		t.Fatal("test requires QQ compatibility mode to be disabled")
+	}
+
+	tests := []struct {
+		action       string
+		params       string
+		nativeAction string
+		wantTarget   string
+		wantGroup    string
+		wantUser     string
+	}{
+		{"send_msg", `{"user_id":100000001,"message":"hello"}`, "sendText", "wxid_target", "", ""},
+		{"send_group_msg", `{"group_id":200000001,"message":"hello"}`, "sendText", "room@chatroom", "", ""},
+		{"send_private_msg", `{"user_id":100000001,"message":"hello"}`, "sendText", "wxid_target", "", ""},
+		{"set_group_kick", `{"group_id":200000001,"user_id":100000001}`, "delMembers", "", "room@chatroom", "wxid_target"},
+		{"set_group_card", `{"group_id":200000001,"card":"Target"}`, "editSelfMemberNick", "", "room@chatroom", ""},
+		{"set_group_leave", `{"group_id":200000001}`, "quitGroup", "", "room@chatroom", ""},
+		{"delete_friend", `{"user_id":100000001}`, "delFriend", "", "", "wxid_target"},
+	}
+	for _, test := range tests {
+		t.Run(test.action, func(t *testing.T) {
+			result := server.dispatchOneBotAction(context.Background(), test.action, json.RawMessage(test.params))
+			if result.retcode != 0 {
+				t.Fatalf("dispatch returned retcode %d: %s", result.retcode, result.message)
+			}
+			call := <-calls
+			if call.action != test.nativeAction {
+				t.Fatalf("native action = %q, want %q", call.action, test.nativeAction)
+			}
+			if test.wantTarget != "" && rawParamString(call.params, "target") != test.wantTarget {
+				t.Errorf("native target = %q, want %q", rawParamString(call.params, "target"), test.wantTarget)
+			}
+			if test.wantGroup != "" && rawParamString(call.params, "chatroom_name") != test.wantGroup {
+				t.Errorf("native chatroom = %q, want %q", rawParamString(call.params, "chatroom_name"), test.wantGroup)
+			}
+			if test.wantUser != "" {
+				if call.action == "delMembers" {
+					var users []string
+					if err := json.Unmarshal(call.params["user_list"], &users); err != nil || len(users) != 1 || users[0] != test.wantUser {
+						t.Errorf("native user list = %#v, err=%v; want [%q]", users, err, test.wantUser)
+					}
+				} else if got := rawParamString(call.params, "wxid"); got != test.wantUser {
+					t.Errorf("native wxid = %q, want %q", got, test.wantUser)
+				}
+			}
+		})
+	}
+}
+
 func TestOneBotListAndRevokeActionsAdaptDataAndReverseIDs(t *testing.T) {
 	type nativeCall struct {
 		action string
@@ -166,7 +235,6 @@ func TestOneBotListAndRevokeActionsAdaptDataAndReverseIDs(t *testing.T) {
 		}
 	}}, "")
 	cfg := server.currentConfig()
-	cfg.Gateway.QQCompat = true
 	server.SetConfig(&cfg, t.TempDir())
 	groupID := server.idMapper.GroupChatroomToNum("room@chatroom")
 	friendID := server.idMapper.UserWxidToNum("wxid_friend")
@@ -184,7 +252,7 @@ func TestOneBotListAndRevokeActionsAdaptDataAndReverseIDs(t *testing.T) {
 		t.Fatalf("get_group_list dispatched %q", groupCall.action)
 	}
 	groups, ok := response.Data.([]any)
-	if !ok || len(groups) != 1 || groups[0].(map[string]any)["group_id"] != float64(groupID) || groups[0].(map[string]any)["group_name"] != "room@chatroom" {
+	if !ok || len(groups) != 1 || groups[0].(map[string]any)["group_id"] != float64(groupID) || groups[0].(map[string]any)["group_name"] != "room@chatroom" || groups[0].(map[string]any)["chatroom_name"] != "room@chatroom" {
 		t.Fatalf("unexpected OneBot group list response: %#v", response.Data)
 	}
 
@@ -194,7 +262,7 @@ func TestOneBotListAndRevokeActionsAdaptDataAndReverseIDs(t *testing.T) {
 		t.Fatalf("get_friend_list dispatched %q", friendCall.action)
 	}
 	friends, ok := response.Data.([]any)
-	if !ok || len(friends) != 1 || friends[0].(map[string]any)["user_id"] != float64(friendID) || friends[0].(map[string]any)["nickname"] != "Friend" {
+	if !ok || len(friends) != 1 || friends[0].(map[string]any)["user_id"] != float64(friendID) || friends[0].(map[string]any)["nickname"] != "Friend" || friends[0].(map[string]any)["wxid"] != "wxid_friend" {
 		t.Fatalf("unexpected OneBot friend list response: %#v", response.Data)
 	}
 
@@ -209,7 +277,7 @@ func TestOneBotListAndRevokeActionsAdaptDataAndReverseIDs(t *testing.T) {
 	}
 	owner := members[0].(map[string]any)
 	member := members[1].(map[string]any)
-	if owner["group_id"] != float64(groupID) || owner["user_id"] != float64(ownerID) || owner["role"] != "owner" || member["user_id"] != float64(memberID) || member["role"] != "member" {
+	if owner["group_id"] != float64(groupID) || owner["user_id"] != float64(ownerID) || owner["wxid"] != "wxid_owner" || owner["role"] != "owner" || member["user_id"] != float64(memberID) || member["wxid"] != "wxid_member" || member["role"] != "member" {
 		t.Fatalf("member IDs or roles were not adapted: %#v", members)
 	}
 

@@ -663,7 +663,7 @@ const loadAllContacts = async () => {
     // 处理群聊
     const gList = resGroups.data || []
     groups.value = gList.map((g) => ({
-      targetId: g.group_name_id || g.group_id,
+      targetId: g.chatroom_name || g.group_name_id || g.group_id,
       onebotId: g.group_id,
       name: g.group_name || String(g.group_id),
       isGroup: true
