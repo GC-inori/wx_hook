@@ -396,7 +396,7 @@ func (m *IDMapper) translateValue(value any, direction translationDirection, key
 			return m.translateCQAt(typed, direction)
 		}
 		switch key {
-		case "self_id", "user_id", "wxid", "user_wxid", "member_wxid", "from_wxid", "sender_wxid", "account", "group_id", "group_wxid", "chatroom_id", "chatroom_name", "to_user", "session", "message_id", "msg_id", "sequence":
+		case "self_id", "user_id", "wxid", "user_wxid", "member_wxid", "from_wxid", "sender_wxid", "account", "group_id", "group_wxid", "chatroom_id", "chatroom_name", "chat_id", "to_user", "session", "message_id", "msg_id", "sequence":
 			return m.translateID(typed, direction, key)
 		}
 		if key == "qq" && typed != "all" {
@@ -437,7 +437,7 @@ func (m *IDMapper) translateID(value any, direction translationDirection, key st
 		return value
 	}
 	switch key {
-	case "to_user", "session":
+	case "to_user", "session", "chat_id":
 		if direction == translateForward {
 			if strings.HasSuffix(text, "@chatroom") {
 				return m.GroupChatroomToNum(text)

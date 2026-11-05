@@ -286,6 +286,17 @@
 
           <!-- 右侧操作工具栏 -->
           <div class="flex items-center gap-1.5">
+            <!-- 查看数据库解密密钥 -->
+            <button
+              @click="openDbKeyModal"
+              class="p-2 rounded-lg text-amber-500 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors cursor-pointer"
+              :title="t('chat.dbKeyTitle')"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+            </button>
+
             <!-- 群成员抽屉开关 (仅限群聊) -->
             <button
               v-if="activeChat.isGroup"
@@ -322,6 +333,19 @@
           ref="messageScrollRef"
           class="flex-1 p-4 md:p-6 overflow-y-auto space-y-4 select-text"
         >
+          <!-- 加载更早历史记录按钮 -->
+          <div class="text-center py-1 select-none">
+            <button
+              @click="loadHistoryMessages"
+              :disabled="isLoadingHistory"
+              class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/[0.06] dark:hover:bg-white/[0.12] text-slate-600 dark:text-slate-300 transition-all border border-slate-200/80 dark:border-white/5 cursor-pointer shadow-2xs"
+            >
+              <svg :class="['w-3.5 h-3.5', { 'animate-spin': isLoadingHistory }]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>{{ isLoadingHistory ? t('chat.loadingHistory') : t('chat.loadHistory') }}</span>
+            </button>
+          </div>
           <!-- 历史消息列表 -->
           <div
             v-for="(msg, idx) in currentMessages"
@@ -586,6 +610,101 @@
         </transition>
       </template>
     </div>
+
+    <!-- ==================== 弹窗：本地数据库解密密钥 (WCDB / SQLCipher) ==================== -->
+    <div
+      v-if="showDbKeyModal"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs select-text"
+    >
+      <div class="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-white/10 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+        <div class="flex items-center justify-between border-b border-slate-200 dark:border-white/10 pb-3">
+          <div class="flex items-center gap-2 text-amber-500">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+            </svg>
+            <h3 class="text-sm font-bold text-slate-800 dark:text-white">{{ t('chat.dbKeyTitle') }}</h3>
+          </div>
+          <button
+            @click="showDbKeyModal = false"
+            class="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <p class="text-xs text-slate-500 dark:text-slate-400">{{ t('chat.dbKeyDesc') }}</p>
+
+        <div v-if="isLoadingDbKey" class="py-8 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+          <svg class="w-4 h-4 animate-spin text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span>正在从微信内存中提取并反混淆 AES 密钥...</span>
+        </div>
+
+        <div v-else-if="dbKeyInfo" class="space-y-3 text-xs">
+          <div>
+            <label class="block text-slate-400 text-[11px] mb-1 font-semibold">{{ t('chat.dbKey') }}</label>
+            <div class="flex items-center gap-2 bg-slate-100 dark:bg-white/[0.05] p-2.5 rounded-lg border border-slate-200 dark:border-white/5 font-mono break-all select-all text-emerald-600 dark:text-emerald-400">
+              <span class="flex-1 text-[11px]">{{ dbKeyInfo.key }}</span>
+              <button
+                @click="copyToClipboard(dbKeyInfo.key)"
+                class="px-2.5 py-1 bg-primary text-white text-[10px] font-semibold rounded hover:bg-primary/90 transition-colors shrink-0 cursor-pointer"
+              >
+                {{ t('chat.copyKey') }}
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2 font-mono text-[11px]">
+            <div class="bg-slate-100 dark:bg-white/[0.05] p-2.5 rounded-lg border border-slate-200 dark:border-white/5">
+              <span class="text-slate-400 block text-[10px]">{{ t('chat.dbPageSize') }}</span>
+              <span class="text-slate-700 dark:text-slate-200 font-semibold">{{ dbKeyInfo.page_size || 4096 }} Bytes</span>
+            </div>
+            <div class="bg-slate-100 dark:bg-white/[0.05] p-2.5 rounded-lg border border-slate-200 dark:border-white/5">
+              <span class="text-slate-400 block text-[10px]">{{ t('chat.dbCipherVer') }}</span>
+              <span class="text-slate-700 dark:text-slate-200 font-semibold">SQLCipher v{{ dbKeyInfo.cipher_version || 4 }}</span>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-slate-400 text-[11px] mb-1 font-semibold">{{ t('chat.dbPath') }}</label>
+            <div class="bg-slate-100 dark:bg-white/[0.05] p-2.5 rounded-lg border border-slate-200 dark:border-white/5 font-mono text-[11px] text-slate-600 dark:text-slate-300 break-all select-all">
+              {{ dbKeyInfo.db_dir }}
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-slate-400 text-[11px] mb-1 font-semibold">{{ t('chat.dbPragmaTip') }}</label>
+            <div class="bg-slate-900 text-slate-200 p-2.5 rounded-lg font-mono text-[10px] leading-relaxed select-all">
+              PRAGMA key = "x'{{ dbKeyInfo.key }}'";<br />
+              PRAGMA cipher_page_size = 4096;<br />
+              PRAGMA cipher_compatibility = 4;
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-2 flex justify-between items-center">
+          <button
+            @click="fetchDbKey"
+            :disabled="isLoadingDbKey"
+            class="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-slate-800 dark:hover:text-white flex items-center gap-1.5"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span>重新提取</span>
+          </button>
+          <button
+            @click="showDbKeyModal = false"
+            class="px-4 py-1.5 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-700 dark:text-white transition-colors"
+          >
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -614,6 +733,12 @@ const messageScrollRef = ref(null)
 const memberSearchQuery = ref('')
 const groupMembersMap = ref({}) // key: targetId, value: members array
 
+// 数据库密钥弹窗与历史记录拉取
+const showDbKeyModal = ref(false)
+const isLoadingDbKey = ref(false)
+const dbKeyInfo = ref(null)
+const isLoadingHistory = ref(false)
+
 // 本地会话消息存储（支持刷新保持）
 const chatHistories = ref({})
 
@@ -640,6 +765,81 @@ const callAPI = async (action, params = {}) => {
     })
   })
   return await resp.json()
+}
+
+// 打开数据库密钥提取弹窗
+const openDbKeyModal = async () => {
+  showDbKeyModal.value = true
+  if (!dbKeyInfo.value) {
+    await fetchDbKey()
+  }
+}
+
+// 向底层驱动请求提取数据库密钥与信息
+const fetchDbKey = async () => {
+  isLoadingDbKey.value = true
+  try {
+    const res = await callAPI('get_db_key')
+    if (res && res.data && res.data.key) {
+      dbKeyInfo.value = res.data
+    } else {
+      toast.error('未能提取到数据库密钥，请确认微信已登录')
+    }
+  } catch (err) {
+    toast.error('提取数据库密钥失败: ' + err.message)
+  } finally {
+    isLoadingDbKey.value = false
+  }
+}
+
+// 复制密钥到剪贴板
+const copyToClipboard = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast.success(t('chat.copied'))
+  } catch (err) {
+    toast.error('复制失败: ' + err.message)
+  }
+}
+
+// 拉取当前会话的历史消息记录
+const loadHistoryMessages = async () => {
+  if (!activeChat.value) return
+  isLoadingHistory.value = true
+  try {
+    const params = {
+      chat_id: activeChat.value.targetId,
+      count: 20
+    }
+    if (activeChat.value.isGroup) {
+      params.group_id = activeChat.value.onebotId || activeChat.value.targetId
+    } else {
+      params.user_id = activeChat.value.onebotId || activeChat.value.targetId
+    }
+    const res = await callAPI('get_history_msg', params)
+    const list = res?.data?.messages || (Array.isArray(res?.data) ? res.data : [])
+    if (Array.isArray(list) && list.length > 0) {
+      const newMsgs = list.map((m) => ({
+        id: m.message_id || `hist_${Date.now()}_${Math.random()}`,
+        sender: m.sender?.user_id === 'self' || m.user_id === 'self' ? 'self' : 'peer',
+        senderName: m.sender?.nickname || m.senderName || activeChat.value.name,
+        senderId: m.sender?.user_id || m.user_id || '',
+        content: m.raw_message || m.message || (typeof m === 'string' ? m : JSON.stringify(m)),
+        time: m.time ? new Date(m.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+        showTimeDivider: true,
+        isRevoked: false
+      }))
+      const curr = chatHistories.value[activeChat.value.targetId] || []
+      chatHistories.value[activeChat.value.targetId] = [...newMsgs, ...curr]
+      toast.success(`已加载 ${newMsgs.length} 条历史记录`)
+    } else {
+      toast.info(t('chat.noMoreHistory'))
+    }
+  } catch (err) {
+    toast.error('拉取历史记录失败: ' + err.message)
+  } finally {
+    isLoadingHistory.value = false
+  }
 }
 
 // 加载通讯录与群列表

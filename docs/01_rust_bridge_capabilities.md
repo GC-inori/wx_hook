@@ -84,6 +84,8 @@
 | **`confirmTrans`** | `confirm_trans` | 使用微信 `CO_AcceptPayTransfer` 确认收取转账；在微信主线程执行 | `trans_id`/`transfer_id`, `invalid_time`, `transfer_attach`（可选） | `{"confirmed": true, "trans_id": "..."}` |
 | **`receiveHongBao`** | `receive_hong_bao` | 调用 CGI 1581 查询并预备拆红包，返回微信 JSON 字符串解析后的对象 | `send_id`, `channel_id`, `native_url`, `session_wxid`, `in_way` | 包含 `retcode`, `hbStatus`, `timingIdentifier` 等 |
 | **`openHongBao`** | `open_hong_bao` | 携带第一阶段 `timingIdentifier` 调用 CGI 1685 拆红包 | `channel_id`, `native_url`, `session_wxid`, `timing_identifier`, `nick_name` | 包含 `retcode`, `amount`（分）, `receiveId` 等 |
+| **`get_db_key`** | `getDbKey` | 提取当前登录账号 WCDB 本地数据库 32 字节 AES 密钥与路径信息；主线程执行 | 无 | `{"key": "64位十六进制", "page_size": 4096, "cipher_version": 4, "wxid": "...", "db_dir": "..."}` |
+| **`queryObj`** | `query_obj` | 查询本地对象/消息元数据与数据库绑定状态 | `msg_id` (可选), `type` (可选) | 包含数据库密钥与元数据或查询路由结果 |
 
 ---
 
@@ -109,6 +111,6 @@
 以下接口仍返回 `retcode: 501 (Not implemented / In progress)`：
 
 1. **联系人扩展列表**：`getPublicList` / `get_public_list`、`getLabelList` / `get_label_list`。
-2. **查询与工具接口**：`queryObj`、`queryGroup`、`returnTrans`、`setReadStatus`、图像解密、登录状态与二维码、浏览器控制及云函数等。
+2. **查询与工具接口**：`queryGroup`、`returnTrans`、`setReadStatus`、图像解密、登录状态与二维码、浏览器控制及云函数等。
 
-消息撤回、群列表、好友列表和群成员列表已接入 Rust 原子接口，不再属于 501 占位接口。
+消息撤回、群列表、好友列表、群成员列表及本地数据库密钥提取 (`get_db_key` / `queryObj`) 已接入 Rust 原子接口，不再属于 501 占位接口。

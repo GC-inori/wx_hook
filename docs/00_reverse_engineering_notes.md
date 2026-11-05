@@ -86,6 +86,10 @@
 | **`RVA_CONTACT_STORAGE_GETTER`** | `0x6383FB0` | 获取联系人与群聊本地存储服务共享指针 (`sub_6383FB0(&shared_ptr, prov)`) |
 | **`RVA_GET_ALL_ROOM_CONTACTS`** | `0x65B3570` | 枚举本地存储中所有已加入群与联系人条目 (`sub_65B3570(&map, storage_svc)`) |
 | **`RVA_GET_CONTACT_BY_WXID`** | `0x786E260` | 从联系人缓存中按 wxid 检索单个联系人对象 (`sub_786E260(&shared_ptr, contact_svc, &wxid)`) |
+| **`RVA_DB_KEY_GETTER`** | `0x619FF60` | 本地 WCDB 数据库 32 字节 AES 密钥提取与 SIMD 解密函数 (`sub_619FF60(&key_str, app_ctx)`) |
+| **`RVA_WCDB_SET_CIPHER_KEY`** | `0x87B3CF0` | WCDB 数据库加密密钥与配置挂载 (`sub_87B3CF0(db, &data, 4096, 4)`) |
+| **`RVA_GET_MSG_LIST_ANCHOR`** | `0x661EE00` | 内部消息锚点分页查询接口 (`sub_661EE00(storage, &result_vec, &session, anchor, limit, direction)`) |
+| **`RVA_GET_ALL_SESSION_MAX_ID`** | `0x6644240` | 获取所有会话最大 LocalId 映射表 (`sub_6644240(&map, storage)`) |
 
 ### 好友删除调用（delFriend）
 
@@ -133,6 +137,37 @@ Linux 微信 `4.1.15.55` 的联系人删除流程依次调用 `sub_60421E0(&app_
    - 核心函数：`sub_65B3570` (`RVA_GET_ALL_ROOM_CONTACTS = 0x65B3570`)；
    - 调用流程：通过 `sub_6383FB0` (`RVA_CONTACT_STORAGE_GETTER = 0x6383FB0`) 获取存储服务指针，调用 `sub_65B3570(&mut map, storage_svc)` 枚举内存联系人表；
    - 遍历方式：读取哈希桶链表首节点 `*(_QWORD **)(map + 16)`，沿 `*node` 指针遍历，`node + 16` 处为联系人/群聊唯一标识 `StdString`；以 `@chatroom` 结尾的归入群列表，其余常规 `wxid` 归入联系人列表。
+
+### 本地数据库解密与历史消息架构（WCDB & SQLCipher Key）
+
+Linux 微信客户端底层采用腾讯自研开源数据库组件 **WCDB**，其底层基于 **SQLCipher 4** 构建：
+
+1. **核心加密参数与数据库清单**：
+   - **页面大小 (Page Size)**：`4096` 字节 (`0x1000`)；
+   - **加密标准 (Cipher Version)**：SQLCipher `Version 4` (`AES-256-CBC`，默认 KDF 迭代 256000 次)；
+   - **本地存储路径**：`$HOME/.xwechat/xwechat_files/<wxid>/db/`；
+   - **核心数据库文件**：
+     - `session/session.db`：会话列表、置顶状态与未读消息映射；
+     - `contact/contact.db`：联系人详尽资料、备注与群聊缓存；
+     - `message/message_0.db`、`message/message_1.db` ...：分库消息记录，包含文本、XML、语音与转账结构；
+     - `message/message_fts.db`：消息全文检索引擎。
+
+2. **32 字节 AES 密钥提取与 SIMD 解密算法**：
+   - **关键函数**：`sub_619FF60` (`RVA_DB_KEY_GETTER = 0x619FF60`)；
+   - **调用机制**：
+     1. 调用 `sub_60421E0(&app_ctx)` 获取全局 `AppContext` 智能指针；
+     2. 传入 `&mut key_str` 和 `app_ctx.0[0]` 调用 `sub_619FF60(&mut key_str, app_ctx.0[0])`；
+     3. 内部从 `app_ctx + 600` 读取被混淆的原始密钥 `std::string`，并通过两组 128 位 SIMD Mask 执行 XOR 反混淆：
+        ```text
+        mask_low  = 0xD8E794D9E8E97BELL, 0x2026CD93325E16D4LL
+        mask_high = 0x3071C16C37B6DF62LL, 0xBB547E5E74E1F8B6LL
+        ```
+     4. 输出完整的 32 字节 raw AES 密钥。转为 64 位十六进制格式后，可直接通过 `PRAGMA key = "x'<hex_key>'"; PRAGMA cipher_page_size = 4096;` 对任意本地数据库进行即时解密。
+
+3. **内部历史消息锚点查询函数 (`GetMsgListWithAnchor`)**：
+   - 核心符号：`sub_661EE00` (`RVA_GET_MSG_LIST_ANCHOR = 0x661EE00`)；
+   - 参数列表：`storage_ptr`, `vector<MsgWrap>* out_vec`, `StdString* session_id`, `u64 anchor_local_id`, `u32 limit`, `u32 direction`；
+   - 机制：支持以指定消息 `local_id` 为基准向前或向后快速分页拉取历史消息列表。
 
 
 

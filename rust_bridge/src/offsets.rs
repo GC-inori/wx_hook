@@ -1,4 +1,5 @@
 pub const WECHAT_VERSION: &str = "4.1.15.55";
+pub const RVA_DB_KEY_GETTER: usize = 0x619FF60;
 pub const RVA_VERIFY_USER: usize = 0x6921760;
 pub const RVA_CO_ACCEPT_PAY_TRANSFER: usize = 0x7269CA0;
 pub const RVA_HONGBAO_REQ_INIT: usize = 0x7CC1BD0;

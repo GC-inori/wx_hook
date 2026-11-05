@@ -550,6 +550,36 @@ fn process_request(request: IpcRequest) -> IpcResponse {
                 Err(error) => make_response(id, 1, &error, None),
             }
         }
+        "get_db_key" | "getDbKey" => match super::sender::get_database_info() {
+            Ok(info) => make_response(id, 0, "success", Some(info)),
+            Err(error) => make_response(id, 1, &error, None),
+        },
+        "query_obj" | "queryObj" => {
+            let data = request.data.as_ref();
+            let msg_id =
+                data.and_then(|value| value.get("msg_id").or_else(|| value.get("message_id")));
+            let has_msg_id = msg_id.is_some_and(|value| {
+                !value.is_null() && value.as_str().is_none_or(|text| !text.trim().is_empty())
+            });
+            let query_type = data
+                .and_then(|value| value.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let requests_database_info = matches!(query_type, "db_key" | "db_info");
+
+            match super::sender::get_database_info() {
+                Ok(mut info) => {
+                    if has_msg_id && !requests_database_info {
+                        if let (Value::Object(info), Some(msg_id)) = (&mut info, msg_id) {
+                            info.insert("msg_id".to_owned(), msg_id.clone());
+                            info.insert("query".to_owned(), data.cloned().unwrap_or(Value::Null));
+                        }
+                    }
+                    make_response(id, 0, "success", Some(info))
+                }
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
         "get_member_list" | "getMemberList" => match parse_chatroom_name(request.data.as_ref()) {
             Ok(room) => match super::sender::get_member_list(&room) {
                 Ok(members) => make_response(id, 0, "success", Some(members)),
@@ -643,13 +673,13 @@ fn process_request(request: IpcRequest) -> IpcResponse {
                 Err(error) => make_response(id, 1, &error, None),
             }
         }
-        "get_public_list" | "getPublicList" | "get_label_list" | "getLabelList" | "query_obj"
-        | "queryObj" | "query_group" | "queryGroup" | "return_trans" | "returnTrans"
-        | "set_read_status" | "setReadStatus" | "decrypt_image" | "decryptImage"
-        | "kill_wechat" | "killWeChat" | "edit_version" | "editVersion" | "get_login_status"
-        | "getLoginStatus" | "get_login_qr_code" | "getLoginQrCode" | "set_download_image"
-        | "setDownloadImage" | "get_auth_info" | "getAuthInfo" | "open_browser" | "openBrowser"
-        | "run_cloud_function" | "runCloudFunction" | "auth_cami" | "authCami" => make_response(
+        "get_public_list" | "getPublicList" | "get_label_list" | "getLabelList" | "query_group"
+        | "queryGroup" | "return_trans" | "returnTrans" | "set_read_status" | "setReadStatus"
+        | "decrypt_image" | "decryptImage" | "kill_wechat" | "killWeChat" | "edit_version"
+        | "editVersion" | "get_login_status" | "getLoginStatus" | "get_login_qr_code"
+        | "getLoginQrCode" | "set_download_image" | "setDownloadImage" | "get_auth_info"
+        | "getAuthInfo" | "open_browser" | "openBrowser" | "run_cloud_function"
+        | "runCloudFunction" | "auth_cami" | "authCami" => make_response(
             id,
             501,
             "Not implemented / In progress",
@@ -1338,6 +1368,22 @@ mod tests {
     }
 
     #[test]
+    fn database_key_and_query_actions_are_not_reported_as_unimplemented() {
+        for action in ["get_db_key", "getDbKey", "query_obj", "queryObj"] {
+            let response = call(action, None);
+            assert_ne!((response.status, response.code), (501, 501), "{action}");
+        }
+        for data in [
+            json!({"type": "db_key"}),
+            json!({"type": "db_info"}),
+            json!({"msg_id": 42, "chat_id": "room@chatroom"}),
+        ] {
+            let response = call("query_obj", Some(data));
+            assert_ne!((response.status, response.code), (501, 501));
+        }
+    }
+
+    #[test]
     fn responses_include_all_contract_fields_and_status_mapping() {
         for (status, code, msg) in [
             (0, 200, "操作成功"),
@@ -1435,7 +1481,6 @@ mod tests {
         let pairs = [
             ("get_public_list", "getPublicList"),
             ("get_label_list", "getLabelList"),
-            ("query_obj", "queryObj"),
             ("query_group", "queryGroup"),
             ("return_trans", "returnTrans"),
             ("set_read_status", "setReadStatus"),

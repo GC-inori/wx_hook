@@ -503,7 +503,87 @@ pub unsafe fn install_sender_hooks(base: usize) -> bool {
     true
 }
 
+fn extract_database_key_bytes(key_str: &StdString) -> Result<Vec<u8>, String> {
+    let is_long = (key_str.words[0] & 1) != 0;
+    let (len, data_ptr) = if is_long {
+        (key_str.words[1], key_str.words[2] as *const u8)
+    } else {
+        (((key_str.words[0] & 0xff) >> 1) as usize, unsafe {
+            (key_str.words.as_ptr() as *const u8).add(1)
+        })
+    };
+
+    if len == 0 {
+        return Err("未能从应用上下文提取数据库密钥".to_owned());
+    }
+    if len > 4096 {
+        return Err("数据库密钥长度超过安全上限".to_owned());
+    }
+    if data_ptr.is_null() || !unsafe { is_readable_ptr(data_ptr) } {
+        return Err("数据库密钥数据不可读".to_owned());
+    }
+
+    let mut bytes = vec![0u8; len];
+    let local = libc::iovec {
+        iov_base: bytes.as_mut_ptr().cast(),
+        iov_len: len,
+    };
+    let remote = libc::iovec {
+        iov_base: data_ptr as *mut c_void,
+        iov_len: len,
+    };
+    let read = unsafe { libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0) };
+    if read != len as isize {
+        return Err("数据库密钥数据不可完整读取".to_owned());
+    }
+    Ok(bytes)
+}
+
+fn database_key_hex(key_str: &StdString) -> Result<String, String> {
+    let bytes = extract_database_key_bytes(key_str)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 // ==================== 对外发送接口 ====================
+
+fn do_get_database_info_direct() -> Result<Value, String> {
+    type GetAppContextFn = unsafe extern "C" fn(*mut [usize; 2]) -> *mut [usize; 2];
+    type GetDbKeyFn = unsafe extern "C" fn(*mut StdString, usize) -> *mut StdString;
+
+    let base = ensure_native_ready("获取数据库密钥")?;
+    let (self_wxid, _) =
+        super::account::get_self_account().ok_or_else(|| "微信未登录或账号未就绪".to_owned())?;
+    let get_app: GetAppContextFn =
+        unsafe { mem::transmute(base + crate::offsets::RVA_APP_CONTEXT_GETTER_SHARED) };
+    let get_key_fn: GetDbKeyFn =
+        unsafe { mem::transmute(base + crate::offsets::RVA_DB_KEY_GETTER) };
+
+    let mut app_ctx = NativeSharedPtr::new();
+    unsafe { get_app(&mut app_ctx.0) };
+    if app_ctx.0[0] == 0 {
+        return Err("微信应用上下文不可用".to_owned());
+    }
+
+    let mut key_str = StdString::new("");
+    unsafe { get_key_fn(&mut key_str, app_ctx.0[0]) };
+    let key_result = database_key_hex(&key_str);
+    key_str.dispose();
+    let hex_key = key_result?;
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_owned());
+    let db_dir = format!("{home}/.xwechat/xwechat_files/{self_wxid}/db");
+    Ok(json!({
+        "key": hex_key,
+        "page_size": 4096,
+        "cipher_version": 4,
+        "wxid": self_wxid,
+        "db_dir": db_dir,
+    }))
+}
+
+pub fn get_database_info() -> Result<Value, String> {
+    run_native_on_main_thread(do_get_database_info_direct)
+}
 
 fn do_send_text_direct(target: &str, text: &str, at_list: Option<&str>) -> Result<(), String> {
     let base = WECHAT_BASE.load(Ordering::Acquire);
@@ -2221,6 +2301,18 @@ mod tests {
         assert_eq!(descriptor[1], vector.end as usize);
         assert_eq!(descriptor[2], vector.cap as usize);
         assert_eq!(unsafe { vector.end.offset_from(vector.start) }, 2);
+    }
+
+    #[test]
+    fn database_key_hex_reads_short_and_long_libcpp_strings() {
+        let mut short = StdString::new("abcd");
+        assert_eq!(database_key_hex(&short).unwrap(), "61626364");
+        short.dispose();
+
+        let long_value = "k".repeat(32);
+        let mut long = StdString::new(&long_value);
+        assert_eq!(database_key_hex(&long).unwrap(), "6b".repeat(32));
+        long.dispose();
     }
 
     #[test]

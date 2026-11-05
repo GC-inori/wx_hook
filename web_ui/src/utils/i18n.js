@@ -34,7 +34,19 @@ const messages = {
       atMember: '成员',
       shortcutTip: '按 Enter 发送，Ctrl+Enter 换行',
       inputPlaceholder: '输入聊天内容，支持 Enter 直接发送...',
-      send: '发送'
+      send: '发送',
+      dbKeyTitle: '本地数据库解密密钥 (WCDB / SQLCipher)',
+      dbKeyDesc: '通过内存注入捕获的原始 32 字节 AES 密钥，可离线解密本地所有消息与联系人数据库。',
+      dbKey: '解密密钥 (HEX 64位)',
+      dbPath: '数据库存储目录',
+      dbPageSize: '页面大小 (Page Size)',
+      dbCipherVer: '加密标准',
+      dbPragmaTip: 'SQLCipher 离线解密指令',
+      copyKey: '复制密钥',
+      copied: '已复制到剪贴板',
+      loadHistory: '加载更多历史消息',
+      loadingHistory: '正在查询历史记录...',
+      noMoreHistory: '已同步全部历史消息'
     },
     header: {
       refresh: '刷新状态',
@@ -322,7 +334,19 @@ const messages = {
       atMember: 'Member',
       shortcutTip: 'Press Enter to send, Ctrl+Enter for newline',
       inputPlaceholder: 'Type a message here...',
-      send: 'Send'
+      send: 'Send',
+      dbKeyTitle: 'Local Database Cipher Key (WCDB / SQLCipher)',
+      dbKeyDesc: 'Raw 32-byte AES key captured from WeChat memory, capable of decrypting all local message and contact databases.',
+      dbKey: 'Decryption Key (HEX 64-char)',
+      dbPath: 'Database Storage Directory',
+      dbPageSize: 'Page Size',
+      dbCipherVer: 'Cipher Standard',
+      dbPragmaTip: 'SQLCipher Decryption Pragma',
+      copyKey: 'Copy Key',
+      copied: 'Copied to clipboard',
+      loadHistory: 'Load Earlier Messages',
+      loadingHistory: 'Loading history...',
+      noMoreHistory: 'All history synchronized'
     },
     header: {
       refresh: 'Refresh Status',

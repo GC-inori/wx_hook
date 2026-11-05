@@ -74,6 +74,9 @@
 | **`set_read_status`** | 设置指定会话为已读状态 |
 | **`create_group`** | 扩展动作；将 `user_list`/`member_list`/`users` 及 `topic`/`name` 转发至 `createGroup`，成功返回新群 ID |
 | **`add_members`** | 扩展动作；将 `group_id` 与 `user_list`/`member_list` 转发至 `addMembers` |
+| **`get_db_key`** | 扩展动作；向底层驱动请求当前登录账号的 32 字节 AES 密钥与数据库目录 |
+| **`get_msg`** | 标准动作；将 `message_id` 转为底层 `queryObj` 查询 |
+| **`get_history_msg`** / **`get_chat_history`** / **`get_group_msg_history`** | 扩展动作；支持会话维度历史消息拉取与数据库密钥元数据联动 |
 
 ---
 

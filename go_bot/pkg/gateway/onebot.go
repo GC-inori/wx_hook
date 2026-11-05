@@ -299,6 +299,21 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 		return oneBotCallResult{data: map[string]any{"app_name": "wxbot-onebot", "app_version": oneBotAppVersion, "protocol_version": "v11"}}
 	case "send_msg", "send_group_msg", "send_private_msg":
 		return s.oneBotSendMessage(ctx, action, params)
+	case "get_db_key":
+		return s.callNative(ctx, "get_db_key", json.RawMessage(`{}`))
+	case "get_history_msg", "get_chat_history", "get_group_msg_history":
+		fields := make(map[string]any, len(params)+1)
+		for key, value := range params {
+			fields[key] = json.RawMessage(value)
+		}
+		if _, exists := params["chat_id"]; !exists {
+			if groupID, exists := params["group_id"]; exists {
+				fields["chat_id"] = json.RawMessage(groupID)
+			} else if userID, exists := params["user_id"]; exists {
+				fields["chat_id"] = json.RawMessage(userID)
+			}
+		}
+		return s.callNative(ctx, "queryObj", marshalParams(fields))
 	case "get_login_info":
 		result := s.callNative(ctx, "getSelfInfo", json.RawMessage(`{}`))
 		if result.retcode != 0 {

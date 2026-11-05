@@ -103,6 +103,72 @@ func TestContactAndPaymentActionsForwardToNativeBridge(t *testing.T) {
 	}
 }
 
+func TestDatabaseAndHistoryActionsRouteThroughNativeQueryObject(t *testing.T) {
+	type nativeCall struct {
+		action string
+		params map[string]json.RawMessage
+	}
+	calls := make(chan nativeCall, 8)
+	server := testServer(t, "en-US", fakeCaller{call: func(_ context.Context, action string, data any) (json.RawMessage, error) {
+		params := make(map[string]json.RawMessage)
+		if err := json.Unmarshal(data.(json.RawMessage), &params); err != nil {
+			return nil, err
+		}
+		calls <- nativeCall{action: action, params: params}
+		return json.RawMessage(`{"key":"aabb","page_size":4096}`), nil
+	}}, "")
+	groupID := server.idMapper.GroupChatroomToNum("room@chatroom")
+	userID := server.idMapper.UserWxidToNum("wxid_friend")
+	messageID := server.idMapper.MessageIDToNum("native-msg-1")
+
+	result := server.dispatchOneBotAction(context.Background(), "get_db_key", json.RawMessage(`{}`))
+	if result.retcode != 0 {
+		t.Fatalf("get_db_key returned retcode %d: %s", result.retcode, result.message)
+	}
+	if call := <-calls; call.action != "get_db_key" {
+		t.Fatalf("get_db_key dispatched %q", call.action)
+	}
+
+	for _, test := range []struct {
+		action string
+		params string
+		chatID string
+		group  string
+		user   string
+	}{
+		{"get_history_msg", `{"chat_id":200000001,"count":20,"message_id":1000001}`, "room@chatroom", "", ""},
+		{"get_chat_history", `{"user_id":100000001,"count":10,"message_id":1000001}`, "wxid_friend", "", "wxid_friend"},
+		{"get_group_msg_history", `{"group_id":200000001,"count":5,"message_id":1000001}`, "room@chatroom", "room@chatroom", ""},
+	} {
+		result := server.dispatchOneBotAction(context.Background(), test.action, json.RawMessage(test.params))
+		if result.retcode != 0 {
+			t.Fatalf("%s returned retcode %d: %s", test.action, result.retcode, result.message)
+		}
+		call := <-calls
+		if call.action != "queryObj" {
+			t.Fatalf("%s dispatched %q, want queryObj", test.action, call.action)
+		}
+		if got := rawParamString(call.params, "chat_id"); got != test.chatID {
+			t.Errorf("%s chat_id = %q, want %q", test.action, got, test.chatID)
+		}
+		if test.group != "" && rawParamString(call.params, "group_id") != test.group {
+			t.Errorf("%s group_id = %q, want %q", test.action, rawParamString(call.params, "group_id"), test.group)
+		}
+		if test.user != "" && rawParamString(call.params, "user_id") != test.user {
+			t.Errorf("%s user_id = %q, want %q", test.action, rawParamString(call.params, "user_id"), test.user)
+		}
+		if got := rawParamString(call.params, "message_id"); got != "native-msg-1" {
+			t.Errorf("%s message_id = %q, want native-msg-1", test.action, got)
+		}
+		if _, ok := call.params["count"]; !ok {
+			t.Errorf("%s did not forward count", test.action)
+		}
+	}
+	if groupID != firstGroupID || userID != firstUserID || messageID != firstMessageID {
+		t.Fatalf("unexpected test ID allocation: group=%d user=%d message=%d", groupID, userID, messageID)
+	}
+}
+
 func TestOneBotGroupAndRemarkActionsDispatchToNativeAtomics(t *testing.T) {
 	type nativeCall struct {
 		action string
