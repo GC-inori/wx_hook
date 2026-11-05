@@ -328,6 +328,44 @@ fn process_request(request: IpcRequest) -> IpcResponse {
             ),
             None => make_response(id, 3, "Account not ready or not logged in", None),
         },
+        "get_login_status" | "getLoginStatus" => {
+            let status = match super::account::get_self_account() {
+                Some((wxid, name)) => json!({
+                    "status": 1,
+                    "is_logged_in": true,
+                    "wxid": wxid,
+                    "nickname": name,
+                }),
+                None => json!({ "status": 0, "is_logged_in": false }),
+            };
+            make_response(id, 0, "", Some(status))
+        }
+        "set_read_status" | "setReadStatus" => {
+            match parse_set_chat_read_target(request.data.as_ref()) {
+                Ok(target) => match super::sender::set_chat_read(&target) {
+                    Ok(()) => make_response(
+                        id,
+                        0,
+                        "ok",
+                        Some(json!({ "success": true, "target": target })),
+                    ),
+                    Err(error) => make_response(id, 1, &error, None),
+                },
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
+        "decrypt_image" | "decryptImage" => {
+            match parse_decrypt_image(request.data.as_ref()) {
+                Ok((src_path, dest_path)) => match super::sender::decrypt_image_file(
+                    &src_path,
+                    dest_path.as_deref(),
+                ) {
+                    Ok(result) => make_response(id, 0, "", Some(result)),
+                    Err(error) => make_response(id, 1, &error, None),
+                },
+                Err(error) => make_response(id, 1, &error, None),
+            }
+        }
         "get_contact_name" | "getContactName" | "get_member_nick" | "getMemberNick" => {
             let wxid = request
                 .data
@@ -674,12 +712,11 @@ fn process_request(request: IpcRequest) -> IpcResponse {
             }
         }
         "get_public_list" | "getPublicList" | "get_label_list" | "getLabelList" | "query_group"
-        | "queryGroup" | "return_trans" | "returnTrans" | "set_read_status" | "setReadStatus"
-        | "decrypt_image" | "decryptImage" | "kill_wechat" | "killWeChat" | "edit_version"
-        | "editVersion" | "get_login_status" | "getLoginStatus" | "get_login_qr_code"
-        | "getLoginQrCode" | "set_download_image" | "setDownloadImage" | "get_auth_info"
-        | "getAuthInfo" | "open_browser" | "openBrowser" | "run_cloud_function"
-        | "runCloudFunction" | "auth_cami" | "authCami" => make_response(
+        | "queryGroup" | "return_trans" | "returnTrans" | "kill_wechat" | "killWeChat"
+        | "edit_version" | "editVersion" | "get_login_qr_code" | "getLoginQrCode"
+        | "set_download_image" | "setDownloadImage" | "get_auth_info" | "getAuthInfo"
+        | "open_browser" | "openBrowser" | "run_cloud_function" | "runCloudFunction"
+        | "auth_cami" | "authCami" => make_response(
             id,
             501,
             "Not implemented / In progress",
@@ -1082,6 +1119,22 @@ fn parse_inline_at_tags(text: &str) -> (String, Option<String>) {
     (out, at_list)
 }
 
+fn parse_set_chat_read_target(data: Option<&Value>) -> Result<String, String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "set_read_status requires a data object".to_owned())?;
+    Ok(required_string(data, &["target", "chat_id", "wxid", "group_id", "user_id"])?.to_owned())
+}
+
+fn parse_decrypt_image(data: Option<&Value>) -> Result<(String, Option<String>), String> {
+    let data = data
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "decrypt_image requires a data object".to_owned())?;
+    let src_path = required_string(data, &["file", "source_file", "image", "src_path"])?.to_owned();
+    let dest_path = optional_string(data, &["dest_path", "output_file"]).map(str::to_owned);
+    Ok((src_path, dest_path))
+}
+
 fn parse_send_text(data: Option<&Value>) -> Result<(String, String, Option<String>), String> {
     let data = data
         .filter(|value| value.is_object())
@@ -1306,6 +1359,28 @@ mod tests {
     }
 
     #[test]
+    fn image_and_chat_read_parsers_accept_all_parameter_aliases() {
+        for key in ["target", "chat_id", "wxid", "group_id", "user_id"] {
+            let data = json!({key: "room@chatroom"});
+            assert_eq!(parse_set_chat_read_target(Some(&data)).unwrap(), "room@chatroom");
+        }
+        assert!(parse_set_chat_read_target(Some(&json!({}))).is_err());
+
+        for key in ["file", "source_file", "image", "src_path"] {
+            let data = json!({key: "encrypted.dat", "output_file": "clear.png"});
+            assert_eq!(
+                parse_decrypt_image(Some(&data)).unwrap(),
+                ("encrypted.dat".to_owned(), Some("clear.png".to_owned()))
+            );
+        }
+        assert_eq!(
+            parse_decrypt_image(Some(&json!({"src_path": "encrypted.dat"}))).unwrap(),
+            ("encrypted.dat".to_owned(), None)
+        );
+        assert!(parse_decrypt_image(Some(&json!({}))).is_err());
+    }
+
+    #[test]
     fn delete_friend_parser_accepts_wxid_and_user_id() {
         assert_eq!(
             parse_delete_friend(Some(&json!({"wxid": "wxid_a"}))).unwrap(),
@@ -1483,11 +1558,8 @@ mod tests {
             ("get_label_list", "getLabelList"),
             ("query_group", "queryGroup"),
             ("return_trans", "returnTrans"),
-            ("set_read_status", "setReadStatus"),
-            ("decrypt_image", "decryptImage"),
             ("kill_wechat", "killWeChat"),
             ("edit_version", "editVersion"),
-            ("get_login_status", "getLoginStatus"),
             ("get_login_qr_code", "getLoginQrCode"),
             ("set_download_image", "setDownloadImage"),
             ("get_auth_info", "getAuthInfo"),
@@ -1506,8 +1578,29 @@ mod tests {
     }
 
     #[test]
+    fn login_status_actions_report_a_structured_status() {
+        for action in ["get_login_status", "getLoginStatus"] {
+            let response = call(action, None);
+            assert_eq!(response.code, 200, "{action}");
+            let result = response.data.expect("login status data");
+            assert!(result["is_logged_in"].is_boolean(), "{action}: {result}");
+            if result["is_logged_in"] == true {
+                assert_eq!(result["status"], 1);
+                assert!(result["wxid"].is_string());
+                assert!(result["nickname"].is_string());
+            } else {
+                assert_eq!(result["status"], 0);
+            }
+        }
+    }
+
+    #[test]
     fn implemented_action_names_dispatch_to_validation() {
         for action in [
+            "set_read_status",
+            "setReadStatus",
+            "decrypt_image",
+            "decryptImage",
             "send_text",
             "sendText",
             "send_at_text",

@@ -86,6 +86,9 @@
 | **`openHongBao`** | `open_hong_bao` | 携带第一阶段 `timingIdentifier` 调用 CGI 1685 拆红包 | `channel_id`, `native_url`, `session_wxid`, `timing_identifier`, `nick_name` | 包含 `retcode`, `amount`（分）, `receiveId` 等 |
 | **`get_db_key`** | `getDbKey` | 提取当前登录账号 WCDB 本地数据库 32 字节 AES 密钥与路径信息；主线程执行 | 无 | `{"key": "64位十六进制", "page_size": 4096, "cipher_version": 4, "wxid": "...", "db_dir": "..."}` |
 | **`queryObj`** | `query_obj` | 查询本地对象/消息元数据与数据库绑定状态 | `msg_id` (可选), `type` (可选) | 包含数据库密钥与元数据或查询路由结果 |
+| **`setReadStatus`** | `set_read_status` | 提交 CGI 251 并清零本地会话未读计数，消除各端未读红点；主线程执行 | `target` / `chat_id` / `wxid` / `group_id` / `user_id` | `{"success": true, "target": "..."}` |
+| **`decryptImage`** | `decrypt_image` | 自动推导单字节异或掩码（XOR Key），将微信加密的 `.dat` 离线解密为图片文件 | `file` / `source_file` / `image`, `output_file` (可选) | `{"src_path": "...", "dest_path": "...", "extension": "jpg", "xor_key": N, "size": N}` |
+| **`getLoginStatus`** | `get_login_status` | 查询当前微信登录状态与账号身份 | 无 | `{"status": 1, "is_logged_in": true, "wxid": "...", "nickname": "..."}` |
 
 ---
 
@@ -111,6 +114,6 @@
 以下接口仍返回 `retcode: 501 (Not implemented / In progress)`：
 
 1. **联系人扩展列表**：`getPublicList` / `get_public_list`、`getLabelList` / `get_label_list`。
-2. **查询与工具接口**：`queryGroup`、`returnTrans`、`setReadStatus`、图像解密、登录状态与二维码、浏览器控制及云函数等。
+2. **查询与工具接口**：`queryGroup`、`returnTrans`、二维码与登录扫码流、浏览器控制及云函数等。
 
-消息撤回、群列表、好友列表、群成员列表及本地数据库密钥提取 (`get_db_key` / `queryObj`) 已接入 Rust 原子接口，不再属于 501 占位接口。
+消息撤回、群/好友列表、群成员列表、本地数据库密钥提取 (`get_db_key`)、会话已读状态 (`setReadStatus`) 以及本地图片离线解密 (`decryptImage`) 已接入 Rust 原子接口，不再属于 501 占位接口。

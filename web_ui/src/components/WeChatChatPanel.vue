@@ -923,6 +923,11 @@ const selectChat = async (item) => {
   activeChat.value = item
   item.unreadCount = 0
 
+  // 异步上报会话已读 (CGI 251 statusnotify，清空全设备红点)
+  if (item.targetId) {
+    callAPI('set_read_status', { target: item.targetId }).catch(() => {})
+  }
+
   // 确保在最近列表中
   const existing = recentChats.value.find((c) => c.targetId === item.targetId)
   if (!existing) {

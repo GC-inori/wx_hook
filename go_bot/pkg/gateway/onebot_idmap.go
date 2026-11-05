@@ -325,10 +325,16 @@ func (m *IDMapper) TranslateActionParams(action string, raw json.RawMessage) jso
 	if err := decoder.Decode(&value); err != nil {
 		return raw
 	}
-	if _, ok := value.(map[string]any); !ok {
+	fields, ok := value.(map[string]any)
+	if !ok {
 		return raw
 	}
 	translated := m.translateValue(value, translateReverse, "")
+	if action == "set_read_status" || action == "set_chat_read" {
+		if target, exists := fields["target"]; exists {
+			fields["target"] = m.translateID(target, translateReverse, "chat_id")
+		}
+	}
 	encoded, err := json.Marshal(translated)
 	if err != nil {
 		return raw

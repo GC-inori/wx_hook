@@ -23,12 +23,18 @@ var aliases = map[string]string{
 	"set_group_card": "editSelfMemberNick", "edit_self_member_nick": "editSelfMemberNick",
 	"agree_friend_req": "agreeFriendReq", "del_friend": "delFriend", "delete_friend": "delFriend",
 	"edit_obj_remark": "editObjRemark", "edit_remark": "editObjRemark", "set_friend_remark": "editObjRemark", "set_friend_add_request": "editObjRemark",
-	"confirm_trans": "confirmTrans", "return_trans": "returnTrans", "set_read_status": "setReadStatus",
+	"confirm_trans": "confirmTrans", "return_trans": "returnTrans", "set_read_status": "setReadStatus", "set_chat_read": "setReadStatus",
 	"receive_hong_bao": "receiveHongBao", "open_hong_bao": "openHongBao",
 }
 
 // Canonical accepts documented names plus legacy snake_case action aliases.
 func Canonical(action string) (string, bool) {
+	switch action {
+	case "decrypt_image", "get_login_status":
+		return action, true
+	case "decode_image":
+		return "decrypt_image", true
+	}
 	if name, ok := aliases[action]; ok {
 		return name, true
 	}

@@ -255,3 +255,34 @@ func TestIDMapperRejectsInvalidPersistenceFile(t *testing.T) {
 		t.Fatal("malformed ID mapping file was accepted")
 	}
 }
+
+func TestIDMapperTranslatesReadStatusTargetAliases(t *testing.T) {
+	mapper := newIDMapper()
+	groupID := mapper.GroupChatroomToNum("room@chatroom")
+	userID := mapper.UserWxidToNum("wxid_target")
+	cases := []struct {
+		action string
+		params json.RawMessage
+		want   string
+	}{
+		{action: "set_read_status", params: json.RawMessage(fmt.Sprintf(`{"target":%d}`, groupID)), want: "room@chatroom"},
+		{action: "set_chat_read", params: json.RawMessage(fmt.Sprintf(`{"target":%d}`, userID)), want: "wxid_target"},
+		{action: "set_read_status", params: json.RawMessage(fmt.Sprintf(`{"chat_id":%d}`, groupID)), want: "room@chatroom"},
+	}
+	for _, test := range cases {
+		translated := mapper.TranslateActionParams(test.action, test.params)
+		var params map[string]any
+		if err := json.Unmarshal(translated, &params); err != nil {
+			t.Fatal(err)
+		}
+		var got string
+		if target, ok := params["target"].(string); ok {
+			got = target
+		} else if chatID, ok := params["chat_id"].(string); ok {
+			got = chatID
+		}
+		if got != test.want {
+			t.Fatalf("%s did not translate target: got %#v, want %q", test.action, params, test.want)
+		}
+	}
+}

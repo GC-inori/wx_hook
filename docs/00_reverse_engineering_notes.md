@@ -90,6 +90,7 @@
 | **`RVA_WCDB_SET_CIPHER_KEY`** | `0x87B3CF0` | WCDB 数据库加密密钥与配置挂载 (`sub_87B3CF0(db, &data, 4096, 4)`) |
 | **`RVA_GET_MSG_LIST_ANCHOR`** | `0x661EE00` | 内部消息锚点分页查询接口 (`sub_661EE00(storage, &result_vec, &session, anchor, limit, direction)`) |
 | **`RVA_GET_ALL_SESSION_MAX_ID`** | `0x6644240` | 获取所有会话最大 LocalId 映射表 (`sub_6644240(&map, storage)`) |
+| **`RVA_SET_CHAT_READ`** | `0x61F6AF0` | 会话已读上报与未读清零接口 (`sub_61F6AF0(&to_user)`)，提交 CGI 251 (`statusnotify`, opcode 1) |
 
 ### 好友删除调用（delFriend）
 
@@ -168,6 +169,23 @@ Linux 微信客户端底层采用腾讯自研开源数据库组件 **WCDB**，�
    - 核心符号：`sub_661EE00` (`RVA_GET_MSG_LIST_ANCHOR = 0x661EE00`)；
    - 参数列表：`storage_ptr`, `vector<MsgWrap>* out_vec`, `StdString* session_id`, `u64 anchor_local_id`, `u32 limit`, `u32 direction`；
    - 机制：支持以指定消息 `local_id` 为基准向前或向后快速分页拉取历史消息列表。
+
+### 会话已读状态与离线图片解密（ReadStatus & Image Decryption）
+
+1. **会话已读状态上报与未读清零 (`setReadStatus`)**：
+   - 核心符号：`sub_61F6AF0` (`RVA_SET_CHAT_READ = 0x61F6AF0`)；
+   - 调用流程：传入目标会话 `StdString* to_user`（支持单聊 `wxid` 或群聊 `xxx@chatroom`），在微信主线程调度执行；
+   - 内部机制：函数内部自动查询目标会话最新消息序列号与时间戳，同步更新本地会话存储将 `unread_count` 置零，随后调用 `sub_61F5A00(1, to_user, 0, &dest)` 提交 CGI 251 (`/cgi-bin/micromsg-bin/statusnotify`，`StatusNotifyCode = 1` 即 `MM_STATUS_NOTIFY_READED`)。该调用将实现手机端与桌面端全设备未读红点静默消除。
+
+2. **本地图片离线解密算法 (`decryptImage`)**：
+   - 存储特征：微信缓存的图片文件通常保存为 `.dat` 格式；
+   - 加密原理：微信对图片文件按字节执行单一异或掩码混淆（Single-byte XOR）；
+   - 自动推导规则：
+     - JPEG: 魔数 `[0xFF, 0xD8]`，校验 `(b0 ^ 0xFF) == (b1 ^ 0xD8)`，XOR Key 为 `b0 ^ 0xFF`；
+     - PNG: 魔数 `[0x89, 0x50]`，校验 `(b0 ^ 0x89) == (b1 ^ 0x50)`，XOR Key 为 `b0 ^ 0x89`；
+     - GIF: 魔数 `[0x47, 0x49]`，校验 `(b0 ^ 0x47) == (b1 ^ 0x49)`，XOR Key 为 `b0 ^ 0x47`；
+     - BMP: 魔数 `[0x42, 0x4D]`，校验 `(b0 ^ 0x42) == (b1 ^ 0x4D)`，XOR Key 为 `b0 ^ 0x42`；
+   - 桥接层对输入文件执行异或还原并直接转存为对应格式文件（`.jpg` / `.png` / `.gif`）。
 
 
 

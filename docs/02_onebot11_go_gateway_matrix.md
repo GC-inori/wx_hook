@@ -71,7 +71,8 @@
 | **`send_xml`** | 发送自定义 XML 卡片数据包 |
 | **`send_card`** | 发送个人/公众号推荐名片卡片 |
 | **`send_applet`** | 发送微信小程序卡片 |
-| **`set_read_status`** | 设置指定会话为已读状态 |
+| **`set_read_status`** | 设置指定会话为已读状态（清除全设备未读红点） |
+| **`decrypt_image`** | 扩展动作；离线解密微信 `.dat` 图片缓存为标准图片文件 |
 | **`create_group`** | 扩展动作；将 `user_list`/`member_list`/`users` 及 `topic`/`name` 转发至 `createGroup`，成功返回新群 ID |
 | **`add_members`** | 扩展动作；将 `group_id` 与 `user_list`/`member_list` 转发至 `addMembers` |
 | **`get_db_key`** | 扩展动作；向底层驱动请求当前登录账号的 32 字节 AES 密钥与数据库目录 |

@@ -585,6 +585,58 @@ pub fn get_database_info() -> Result<Value, String> {
     run_native_on_main_thread(do_get_database_info_direct)
 }
 
+pub fn decrypt_image_file(
+    src_path: &str,
+    dest_path: Option<&str>,
+) -> Result<Value, String> {
+    let bytes = std::fs::read(src_path).map_err(|e| format!("Failed to read source file: {e}"))?;
+    if bytes.len() < 2 {
+        return Err("File too small to be an encrypted image".to_owned());
+    }
+
+    let b0 = bytes[0];
+    let b1 = bytes[1];
+    let (key, ext) = if (b0 ^ 0xFF) == (b1 ^ 0xD8) {
+        (b0 ^ 0xFF, "jpg")
+    } else if (b0 ^ 0x89) == (b1 ^ 0x50) {
+        (b0 ^ 0x89, "png")
+    } else if (b0 ^ 0x47) == (b1 ^ 0x49) {
+        (b0 ^ 0x47, "gif")
+    } else if (b0 ^ 0x42) == (b1 ^ 0x4D) {
+        (b0 ^ 0x42, "bmp")
+    } else if b0 == 0xFF && b1 == 0xD8 {
+        (0, "jpg")
+    } else if b0 == 0x89 && b1 == 0x50 {
+        (0, "png")
+    } else if b0 == 0x47 && b1 == 0x49 {
+        (0, "gif")
+    } else {
+        return Err("Unknown image encoding or not an encrypted .dat file".to_owned());
+    };
+
+    let decrypted: Vec<u8> = if key != 0 {
+        bytes.iter().map(|b| b ^ key).collect()
+    } else {
+        bytes
+    };
+    let out_path = match dest_path.filter(|path| !path.is_empty()) {
+        Some(path) => path.to_owned(),
+        None if src_path.ends_with(".dat") => {
+            format!("{}.{ext}", src_path.strip_suffix(".dat").unwrap_or(src_path))
+        }
+        None => format!("{src_path}.{ext}"),
+    };
+    std::fs::write(&out_path, &decrypted)
+        .map_err(|e| format!("Failed to write decrypted image: {e}"))?;
+    Ok(json!({
+        "src_path": src_path,
+        "dest_path": out_path,
+        "extension": ext,
+        "xor_key": key,
+        "size": decrypted.len(),
+    }))
+}
+
 fn do_send_text_direct(target: &str, text: &str, at_list: Option<&str>) -> Result<(), String> {
     let base = WECHAT_BASE.load(Ordering::Acquire);
     if base == 0 {
@@ -657,6 +709,30 @@ fn do_send_text_direct(target: &str, text: &str, at_list: Option<&str>) -> Resul
 
 pub fn send_text(target: &str, text: &str) -> Result<(), String> {
     send_text_with_at(target, text, None)
+}
+
+fn do_set_chat_read_direct(target: &str) -> Result<(), String> {
+    let base = ensure_native_ready("set chat read")?;
+    type SetChatReadFn = unsafe extern "C" fn(*const StdString) -> usize;
+    let set_read: SetChatReadFn = unsafe {
+        mem::transmute(base + crate::offsets::RVA_SET_CHAT_READ)
+    };
+    let mut target_str = StdString::new(target);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        set_read(&target_str);
+    }));
+    target_str.dispose();
+    outcome
+        .map(|_| ())
+        .map_err(|_| "set_chat_read failed on main thread".to_owned())
+}
+
+pub fn set_chat_read(target: &str) -> Result<(), String> {
+    let target_clean = target.trim().to_owned();
+    if target_clean.is_empty() {
+        return Err("target is empty".to_owned());
+    }
+    run_native_on_main_thread(move || do_set_chat_read_direct(&target_clean))
 }
 
 pub fn send_text_with_at(target: &str, text: &str, at_list: Option<&str>) -> Result<(), String> {
@@ -2281,6 +2357,87 @@ pub fn send_xml(target: &str, xml: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unique_image_test_path(extension: &str) -> std::path::PathBuf {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "wx_bridge_decrypt_{}_{}.{}",
+            std::process::id(),
+            timestamp,
+            extension
+        ))
+    }
+
+    #[test]
+    fn decrypt_image_file_detects_xor_formats_and_writes_default_path() {
+        for (magic, extension) in [
+            (&[0xFF, 0xD8, 0x11][..], "jpg"),
+            (&[0x89, 0x50, 0x11][..], "png"),
+            (&[0x47, 0x49, 0x11][..], "gif"),
+            (&[0x42, 0x4D, 0x11][..], "bmp"),
+        ] {
+            let source = unique_image_test_path("dat");
+            let key = 0x5A;
+            let encrypted: Vec<u8> = magic.iter().map(|byte| byte ^ key).collect();
+            std::fs::write(&source, encrypted).unwrap();
+
+            let result = decrypt_image_file(source.to_str().unwrap(), None).unwrap();
+            let destination = result["dest_path"].as_str().unwrap();
+            assert!(destination.ends_with(&format!(".{extension}")));
+            assert_eq!(result["extension"], extension);
+            assert_eq!(result["xor_key"], key);
+            assert_eq!(result["size"], magic.len());
+            assert_eq!(std::fs::read(destination).unwrap(), magic);
+
+            std::fs::remove_file(source).unwrap();
+            std::fs::remove_file(destination).unwrap();
+        }
+    }
+
+    #[test]
+    fn decrypt_image_file_accepts_plain_images_and_explicit_destinations() {
+        let source = unique_image_test_path("dat");
+        let destination = unique_image_test_path("png");
+        let plain = [0x89, 0x50, 0x4E, 0x47];
+        std::fs::write(&source, plain).unwrap();
+
+        let result = decrypt_image_file(
+            source.to_str().unwrap(),
+            Some(destination.to_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(result["dest_path"], destination.to_str().unwrap());
+        assert_eq!(result["xor_key"], 0);
+        assert_eq!(std::fs::read(&destination).unwrap(), plain);
+
+        std::fs::remove_file(source).unwrap();
+        std::fs::remove_file(destination).unwrap();
+    }
+
+    #[test]
+    fn decrypt_image_file_rejects_short_and_unknown_data() {
+        let source = unique_image_test_path("dat");
+        std::fs::write(&source, [0x00]).unwrap();
+        assert_eq!(
+            decrypt_image_file(source.to_str().unwrap(), None).unwrap_err(),
+            "File too small to be an encrypted image"
+        );
+
+        std::fs::write(&source, [0x00, 0x01]).unwrap();
+        assert_eq!(
+            decrypt_image_file(source.to_str().unwrap(), None).unwrap_err(),
+            "Unknown image encoding or not an encrypted .dat file"
+        );
+        std::fs::remove_file(source).unwrap();
+    }
+
+    #[test]
+    fn set_chat_read_rejects_an_empty_target_before_native_dispatch() {
+        assert_eq!(set_chat_read("  ").unwrap_err(), "target is empty");
+    }
 
     #[test]
     fn std_string_and_native_vector_match_libcpp_layout() {

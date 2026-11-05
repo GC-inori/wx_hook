@@ -619,9 +619,12 @@
                           <option value="set_friend_add_request">set_friend_add_request (处理好友申请)</option>
                         </optgroup>
                         <optgroup label="微信专属扩展">
+                          <option value="get_db_key">get_db_key (获取数据库解密密钥)</option>
+                          <option value="decrypt_image">decrypt_image (离线解密 .dat 图片)</option>
+                          <option value="set_read_status">set_read_status (设置会话已读)</option>
                           <option value="send_xml">send_xml (发送卡片 XML)</option>
                           <option value="query_obj">query_obj (查询微信号资料)</option>
-                          <option value="set_read_status">set_read_status (设置会话已读)</option>
+                          <option value="get_login_status">get_login_status (获取登录状态)</option>
                         </optgroup>
                       </select>
                     </div>
@@ -989,6 +992,18 @@ const onActionPresetChange = () => {
     tester.value.extraJson = '{\n  "message_id": 1001\n}'
   } else if (tester.value.action === 'get_group_member_list') {
     tester.value.target = '12345678@chatroom'
+    tester.value.content = ''
+    tester.value.extraJson = '{}'
+  } else if (tester.value.action === 'set_read_status') {
+    tester.value.target = 'filehelper'
+    tester.value.content = ''
+    tester.value.extraJson = '{\n  "target": "filehelper"\n}'
+  } else if (tester.value.action === 'decrypt_image') {
+    tester.value.target = ''
+    tester.value.content = ''
+    tester.value.extraJson = '{\n  "file": "/root/.xwechat/xwechat_files/all_users/config/test.dat"\n}'
+  } else if (tester.value.action === 'get_db_key') {
+    tester.value.target = ''
     tester.value.content = ''
     tester.value.extraJson = '{}'
   } else {

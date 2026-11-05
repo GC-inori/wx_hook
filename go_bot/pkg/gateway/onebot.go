@@ -301,6 +301,24 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 		return s.oneBotSendMessage(ctx, action, params)
 	case "get_db_key":
 		return s.callNative(ctx, "get_db_key", json.RawMessage(`{}`))
+	case "set_read_status", "set_chat_read":
+		target := rawParamIdentifier(params, "target", "chat_id", "group_id", "user_id")
+		if target == "" {
+			return invalidOneBotParam("target, chat_id, group_id, or user_id is required")
+		}
+		return s.callNative(ctx, "set_read_status", marshalParams(map[string]any{"target": target}))
+	case "decrypt_image", "decode_image":
+		source := firstRawString(params, "file", "source_file", "image", "src_path")
+		if source == "" {
+			return invalidOneBotParam("file, source_file, image, or src_path is required")
+		}
+		forwarded := map[string]any{"src_path": source}
+		if destination := firstRawString(params, "dest_path", "output_file"); destination != "" {
+			forwarded["dest_path"] = destination
+		}
+		return s.callNative(ctx, "decrypt_image", marshalParams(forwarded))
+	case "get_login_status":
+		return s.callNative(ctx, "get_login_status", json.RawMessage(`{}`))
 	case "get_history_msg", "get_chat_history", "get_group_msg_history":
 		fields := make(map[string]any, len(params)+1)
 		for key, value := range params {
@@ -469,7 +487,7 @@ func (s *Server) dispatchOneBotAction(ctx context.Context, action string, raw js
 		return s.callNative(ctx, "addMembers", marshalParams(fields))
 	case "set_group_add_request":
 		return oneBotCallResult{retcode: 1405, data: map[string]any{}, message: "group add requests are not supported by the native bridge"}
-	case "send_xml", "send_card", "send_applet", "query_obj", "set_read_status":
+	case "send_xml", "send_card", "send_applet", "query_obj":
 		return s.dispatchExtendedOneBot(ctx, action, params)
 	default:
 		return s.dispatchExtendedOneBot(ctx, action, params)
@@ -714,6 +732,10 @@ func invalidOneBotParam(message string) oneBotCallResult {
 }
 
 func isNativeExtendedAction(action string) bool {
+	switch action {
+	case "set_chat_read", "decrypt_image", "decode_image", "get_login_status":
+		return true
+	}
 	_, ok := protocol.Canonical(action)
 	return ok
 }

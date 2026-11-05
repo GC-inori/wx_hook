@@ -383,3 +383,55 @@ func TestOneBotAPIPathAndVersionInfo(t *testing.T) {
 		}
 	}
 }
+
+func TestOneBotReadImageAndLoginStatusActionsForwardToNative(t *testing.T) {
+	type nativeCall struct {
+		action string
+		params json.RawMessage
+	}
+	calls := make(chan nativeCall, 5)
+	server := testServer(t, "en-US", fakeCaller{call: func(_ context.Context, action string, data any) (json.RawMessage, error) {
+		calls <- nativeCall{action: action, params: data.(json.RawMessage)}
+		return json.RawMessage(`{"ok":true}`), nil
+	}}, "")
+	groupID := server.idMapper.GroupChatroomToNum("room@chatroom")
+	userID := server.idMapper.UserWxidToNum("wxid_target")
+
+	tests := []struct {
+		action       string
+		params       map[string]any
+		wantAction   string
+		wantTarget   string
+		wantSource   string
+		wantDestPath string
+	}{
+		{action: "set_read_status", params: map[string]any{"group_id": groupID}, wantAction: "setReadStatus", wantTarget: "room@chatroom"},
+		{action: "set_chat_read", params: map[string]any{"target": userID}, wantAction: "setReadStatus", wantTarget: "wxid_target"},
+		{action: "decrypt_image", params: map[string]any{"file": "encrypted.dat", "output_file": "clear.png"}, wantAction: "decrypt_image", wantSource: "encrypted.dat", wantDestPath: "clear.png"},
+		{action: "decode_image", params: map[string]any{"image": "another.dat"}, wantAction: "decrypt_image", wantSource: "another.dat"},
+		{action: "get_login_status", params: map[string]any{}, wantAction: "get_login_status"},
+	}
+	for _, test := range tests {
+		result := server.dispatchOneBotAction(context.Background(), test.action, marshalParams(test.params))
+		if result.retcode != 0 {
+			t.Fatalf("%s returned error: %+v", test.action, result)
+		}
+		call := <-calls
+		if call.action != test.wantAction {
+			t.Fatalf("%s dispatched as %q, want %q", test.action, call.action, test.wantAction)
+		}
+		var forwarded map[string]json.RawMessage
+		if err := json.Unmarshal(call.params, &forwarded); err != nil {
+			t.Fatalf("%s sent invalid native params: %v", test.action, err)
+		}
+		if test.wantTarget != "" && rawParamString(forwarded, "target") != test.wantTarget {
+			t.Fatalf("%s target was not translated: %s", test.action, call.params)
+		}
+		if test.wantSource != "" && rawParamString(forwarded, "src_path") != test.wantSource {
+			t.Fatalf("%s source was not normalized: %s", test.action, call.params)
+		}
+		if test.wantDestPath != "" && rawParamString(forwarded, "dest_path") != test.wantDestPath {
+			t.Fatalf("%s destination was not normalized: %s", test.action, call.params)
+		}
+	}
+}
