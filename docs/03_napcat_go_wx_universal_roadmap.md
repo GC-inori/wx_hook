@@ -78,12 +78,17 @@
 
 ---
 
-## 四、 分支建立与实施步骤
+## 四、 分支建立与交付现状 (Completed)
 
-1. 在 `E:\Code\Go\napcat-bot-go` 仓库执行分支检出：
-   ```bash
-   git checkout -b wx
-   ```
-2. 剔除 `projects/l4d2/` 和 `cmd/l4d2-*` 相关代码，清理 `service/bot_service.go` 中对 L4D2 CommandGateway 的硬编码引入。
-3. 调整 `config.example.yaml`，仅保留 AI、通用搜索、定时器与微信通用反向配置。
-4. 本地执行 `go test ./...` 确保全部通用模块单测通过，并以 `wx` 分支作为后续微信通用功能开发的主干。
+1. **分支创建与检出**：
+   - 已从 `generic-dev` 正式检出独立的 **`wx`** 分支（Commit `0ab10cc`）。
+2. **专有游戏模块物理删除**：
+   - 彻底移除了 `projects/l4d2/`、`cmd/l4d2-*`、`cmd/mcp-l4d2-*`、`l4d2plugin/` 与 `l4d2bot.service`（删除近 6000 行专有耦合代码）。
+3. **微信双通道 AI 调度与欢迎语接入**：
+   - 放开私聊限制，私聊直接触发大模型意图路由，回复走 `SendPrivateMsg`；群聊保留 `@机器人` 触发；
+   - 监听 `notice_type: "friend_add"`，实现添加好友自动发送欢迎语。
+4. **反向 WebSocket 默认配置**：
+   - 默认反向 WebSocket 监听 `0.0.0.0:27039/ws`；
+   - 默认禁用 `show_waiting` 思考占位符以杜绝废弃消息残留。
+5. **单元测试验证**：
+   - `go test ./...` 100% PASS。
