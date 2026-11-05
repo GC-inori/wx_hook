@@ -585,10 +585,25 @@ pub fn get_database_info() -> Result<Value, String> {
     run_native_on_main_thread(do_get_database_info_direct)
 }
 
-pub fn decrypt_image_file(
-    src_path: &str,
-    dest_path: Option<&str>,
-) -> Result<Value, String> {
+pub fn decrypt_image_file(src_path: &str, dest_path: Option<&str>) -> Result<Value, String> {
+    let out_path = match dest_path.filter(|path| !path.is_empty()) {
+        Some(path) => path.to_owned(),
+        None if src_path.ends_with(".dat") => {
+            format!("{}.jpg", src_path.strip_suffix(".dat").unwrap_or(src_path))
+        }
+        None => format!("{src_path}.jpg"),
+    };
+
+    if WECHAT_BASE.load(Ordering::Acquire) != 0 {
+        let src_path_owned = src_path.to_owned();
+        let out_path_owned = out_path.clone();
+        if let Ok(result) = run_native_on_main_thread(move || {
+            do_decrypt_file_native_direct(&src_path_owned, &out_path_owned)
+        }) {
+            return Ok(result);
+        }
+    }
+
     let bytes = std::fs::read(src_path).map_err(|e| format!("Failed to read source file: {e}"))?;
     if bytes.len() < 2 {
         return Err("File too small to be an encrypted image".to_owned());
@@ -619,13 +634,6 @@ pub fn decrypt_image_file(
     } else {
         bytes
     };
-    let out_path = match dest_path.filter(|path| !path.is_empty()) {
-        Some(path) => path.to_owned(),
-        None if src_path.ends_with(".dat") => {
-            format!("{}.{ext}", src_path.strip_suffix(".dat").unwrap_or(src_path))
-        }
-        None => format!("{src_path}.{ext}"),
-    };
     std::fs::write(&out_path, &decrypted)
         .map_err(|e| format!("Failed to write decrypted image: {e}"))?;
     Ok(json!({
@@ -635,6 +643,66 @@ pub fn decrypt_image_file(
         "xor_key": key,
         "size": decrypted.len(),
     }))
+}
+
+fn do_decrypt_file_native_direct(src_path: &str, out_path: &str) -> Result<Value, String> {
+    type DecryptFileFn = unsafe extern "C" fn(*const StdString, *const StdString, u32, u32) -> u8;
+
+    let base = WECHAT_BASE.load(Ordering::Acquire);
+    if base == 0 {
+        return Err("微信主程序基址未初始化，无法调用文件解密函数".to_owned());
+    }
+
+    let decrypt_fn: DecryptFileFn =
+        unsafe { mem::transmute(base + crate::offsets::RVA_DECRYPT_FILE) };
+    let mut src_string = StdString::new(src_path);
+    let mut dest_string = StdString::new(out_path);
+    let decrypt_result = unsafe { decrypt_fn(&src_string, &dest_string, 0, 0) };
+    src_string.dispose();
+    dest_string.dispose();
+
+    if decrypt_result == 0 {
+        return Err("WeChat native file decryption failed".to_owned());
+    }
+
+    let metadata = std::fs::metadata(out_path)
+        .map_err(|e| format!("Native decrypted file is unavailable: {e}"))?;
+    if metadata.len() == 0 {
+        return Err("Native decrypted file is empty".to_owned());
+    }
+
+    let mut header = [0u8; 8];
+    let header_len = {
+        let mut file = std::fs::File::open(out_path)
+            .map_err(|e| format!("Failed to inspect native decrypted file: {e}"))?;
+        use std::io::Read;
+        file.read(&mut header)
+            .map_err(|e| format!("Failed to read native decrypted file header: {e}"))?
+    };
+    let ext = detect_image_extension(&header[..header_len])
+        .ok_or_else(|| "Native decrypted file has an unknown image format".to_owned())?;
+
+    Ok(json!({
+        "src_path": src_path,
+        "dest_path": out_path,
+        "extension": ext,
+        "xor_key": 0,
+        "size": metadata.len(),
+    }))
+}
+
+fn detect_image_extension(header: &[u8]) -> Option<&'static str> {
+    if header.starts_with(&[0xFF, 0xD8]) {
+        Some("jpg")
+    } else if header.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("png")
+    } else if header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if header.starts_with(b"BM") {
+        Some("bmp")
+    } else {
+        None
+    }
 }
 
 fn do_send_text_direct(target: &str, text: &str, at_list: Option<&str>) -> Result<(), String> {
@@ -714,9 +782,8 @@ pub fn send_text(target: &str, text: &str) -> Result<(), String> {
 fn do_set_chat_read_direct(target: &str) -> Result<(), String> {
     let base = ensure_native_ready("set chat read")?;
     type SetChatReadFn = unsafe extern "C" fn(*const StdString) -> usize;
-    let set_read: SetChatReadFn = unsafe {
-        mem::transmute(base + crate::offsets::RVA_SET_CHAT_READ)
-    };
+    let set_read: SetChatReadFn =
+        unsafe { mem::transmute(base + crate::offsets::RVA_SET_CHAT_READ) };
     let mut target_str = StdString::new(target);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         set_read(&target_str);
@@ -2384,9 +2451,11 @@ mod tests {
             let encrypted: Vec<u8> = magic.iter().map(|byte| byte ^ key).collect();
             std::fs::write(&source, encrypted).unwrap();
 
-            let result = decrypt_image_file(source.to_str().unwrap(), None).unwrap();
+            let source_path = source.to_str().unwrap();
+            let expected_destination = format!("{}.jpg", source_path.strip_suffix(".dat").unwrap());
+            let result = decrypt_image_file(source_path, None).unwrap();
             let destination = result["dest_path"].as_str().unwrap();
-            assert!(destination.ends_with(&format!(".{extension}")));
+            assert_eq!(destination, expected_destination);
             assert_eq!(result["extension"], extension);
             assert_eq!(result["xor_key"], key);
             assert_eq!(result["size"], magic.len());
@@ -2395,6 +2464,38 @@ mod tests {
             std::fs::remove_file(source).unwrap();
             std::fs::remove_file(destination).unwrap();
         }
+    }
+
+    #[test]
+    fn decrypt_image_file_appends_jpg_for_non_dat_sources_and_empty_destinations() {
+        let source = unique_image_test_path("bin");
+        let key = 0x5A;
+        let plain = [0xFF, 0xD8, 0x11];
+        let encrypted: Vec<u8> = plain.iter().map(|byte| byte ^ key).collect();
+        std::fs::write(&source, encrypted).unwrap();
+
+        let expected_destination = format!("{}.jpg", source.to_str().unwrap());
+        let result = decrypt_image_file(source.to_str().unwrap(), Some("")).unwrap();
+        assert_eq!(result["dest_path"], expected_destination);
+        assert_eq!(result["extension"], "jpg");
+        assert_eq!(result["xor_key"], key);
+        assert_eq!(std::fs::read(&expected_destination).unwrap(), plain);
+
+        std::fs::remove_file(source).unwrap();
+        std::fs::remove_file(expected_destination).unwrap();
+    }
+
+    #[test]
+    fn native_image_header_detection_recognizes_supported_formats() {
+        for (header, expected) in [
+            (&[0xFF, 0xD8, 0xFF][..], "jpg"),
+            (&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A][..], "png"),
+            (b"GIF89a" as &[u8], "gif"),
+            (b"BM" as &[u8], "bmp"),
+        ] {
+            assert_eq!(detect_image_extension(header), Some(expected));
+        }
+        assert_eq!(detect_image_extension(b"unknown"), None);
     }
 
     #[test]

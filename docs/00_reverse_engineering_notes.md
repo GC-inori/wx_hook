@@ -91,6 +91,7 @@
 | **`RVA_GET_MSG_LIST_ANCHOR`** | `0x661EE00` | 内部消息锚点分页查询接口 (`sub_661EE00(storage, &result_vec, &session, anchor, limit, direction)`) |
 | **`RVA_GET_ALL_SESSION_MAX_ID`** | `0x6644240` | 获取所有会话最大 LocalId 映射表 (`sub_6644240(&map, storage)`) |
 | **`RVA_SET_CHAT_READ`** | `0x61F6AF0` | 会话已读上报与未读清零接口 (`sub_61F6AF0(&to_user)`)，提交 CGI 251 (`statusnotify`, opcode 1) |
+| **`RVA_DECRYPT_FILE`** | `0x7482130` | 微信内部离线文件与图片解密转换接口 (`sub_7482130(&src_path, &dest_path, 0, 0)`)，支持 V2 协议头 |
 
 ### 好友删除调用（delFriend）
 
